@@ -57,6 +57,8 @@ jobs:
             -D BUILD_TESTS=OFF \
             -D BUILD_PERF_TESTS=OFF \
             -D BUILD_EXAMPLES=OFF \
+            -D BUILD_ANDROID_EXAMPLES=OFF \
+            -D INSTALL_ANDROID_EXAMPLES=OFF \
             -D OPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules \
             ../opencv
 
