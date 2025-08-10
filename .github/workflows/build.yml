@@ -1,4 +1,4 @@
-name: Build OpenCV for Meta Quest
+name: Build OpenCV
 
 on:
   workflow_dispatch:
@@ -37,40 +37,41 @@ jobs:
         run: |
           git clone --branch 4.9.0 https://github.com/opencv/opencv.git
           git clone --branch 4.9.0 https://github.com/opencv/opencv_contrib.git
-          # Keep only ximgproc module
           cd opencv_contrib/modules
           ls | grep -v -E 'ximgproc' | xargs rm -rf || true
           cd ../..
 
-      - name: Configure CMake for Android
+      - name: Configure CMake for Android (native only)
         run: |
-          mkdir build-android
+          mkdir -p build-android
           cd build-android
           cmake \
             -G Ninja \
+            -D CMAKE_BUILD_TYPE=Release \
             -D CMAKE_TOOLCHAIN_FILE=$HOME/android-sdk/ndk/25.2.9519653/build/cmake/android.toolchain.cmake \
             -D ANDROID_ABI=arm64-v8a \
             -D ANDROID_PLATFORM=android-26 \
             -D BUILD_SHARED_LIBS=ON \
             -D BUILD_opencv_java=OFF \
-            -D BUILD_opencv_python=OFF \
             -D BUILD_TESTS=OFF \
             -D BUILD_PERF_TESTS=OFF \
             -D BUILD_EXAMPLES=OFF \
             -D BUILD_ANDROID_EXAMPLES=OFF \
-            -D INSTALL_ANDROID_EXAMPLES=OFF \
+            -D BUILD_ANDROID_PROJECTS=OFF \
             -D OPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules \
             ../opencv
 
-      - name: Build
+      - name: Build (no install)
         run: |
           cd build-android
-          cmake --build . --target install -j$(nproc)
+          cmake --build . -j"$(nproc)"
 
-      - name: Upload artifacts
+      - name: Upload artifacts (.so and headers)
         uses: actions/upload-artifact@v4
         with:
-          name: opencv-quest-arm64
+          name: opencv-android-arm64-native
           path: |
-            build-android/install/sdk/native/libs/arm64-v8a/*.so
-            build-android/install/sdk/native/jni/include
+            build-android/lib/*.so
+            build-android/3rdparty/**/*.so
+            build-android/opencv2/**/*.h
+            build-android/opencv2/**/*.hpp
