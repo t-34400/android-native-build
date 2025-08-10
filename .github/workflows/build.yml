@@ -71,7 +71,6 @@ jobs:
         with:
           name: opencv-android-arm64-native
           path: |
-            build-android/lib/*.so
-            build-android/3rdparty/**/*.so
+            build-android/**/*.so
             build-android/opencv2/**/*.h
             build-android/opencv2/**/*.hpp
