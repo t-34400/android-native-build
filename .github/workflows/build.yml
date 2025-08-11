@@ -62,13 +62,15 @@ jobs:
       - name: Build
         run: cmake --build build-android -j"$(nproc)"
       
-      - name: Install
-        run: cmake --install build-android
-      
-      - name: Upload artifacts (installed SDK layout)
+      - name: Install (produce SDK layout)
+        run: |
+          cd build-android
+          cmake --install . --prefix ../install-android
+
+      - name: Upload artifacts (.so and headers)
         uses: actions/upload-artifact@v4
         with:
-          name: opencv-android-arm64-sdk
+          name: opencv-android-arm64-native
           path: |
             install-android/sdk/native/jni/include/**
             install-android/sdk/native/libs/arm64-v8a/*.so
