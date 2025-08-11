@@ -44,8 +44,7 @@ jobs:
       - name: Configure CMake for Android (native only)
         run: |
           mkdir -p build-android
-          cd build-android
-          cmake \
+          cmake -S opencv -B build-android \
             -G Ninja \
             -D CMAKE_BUILD_TYPE=Release \
             -D CMAKE_TOOLCHAIN_FILE=$HOME/android-sdk/ndk/25.2.9519653/build/cmake/android.toolchain.cmake \
@@ -53,24 +52,23 @@ jobs:
             -D ANDROID_PLATFORM=android-26 \
             -D BUILD_SHARED_LIBS=ON \
             -D BUILD_opencv_java=OFF \
-            -D BUILD_TESTS=OFF \
-            -D BUILD_PERF_TESTS=OFF \
-            -D BUILD_EXAMPLES=OFF \
-            -D BUILD_ANDROID_EXAMPLES=OFF \
+            -D BUILD_TESTS=OFF -D BUILD_PERF_TESTS=OFF \
+            -D BUILD_EXAMPLES=OFF -D BUILD_ANDROID_EXAMPLES=OFF \
             -D BUILD_ANDROID_PROJECTS=OFF \
-            -D OPENCV_EXTRA_MODULES_PATH=../opencv_contrib/modules \
-            ../opencv
-
-      - name: Build (no install)
-        run: |
-          cd build-android
-          cmake --build . -j"$(nproc)"
-
-      - name: Upload artifacts (.so and headers)
+            -D OPENCV_EXTRA_MODULES_PATH=$GITHUB_WORKSPACE/opencv_contrib/modules \
+            -D BUILD_LIST=core,imgproc,calib3d,ximgproc,imgcodecs,highgui,videoio \
+            -D CMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install-android/sdk
+      
+      - name: Build
+        run: cmake --build build-android -j"$(nproc)"
+      
+      - name: Install
+        run: cmake --install build-android
+      
+      - name: Upload artifacts (installed SDK layout)
         uses: actions/upload-artifact@v4
         with:
-          name: opencv-android-arm64-native
+          name: opencv-android-arm64-sdk
           path: |
-            build-android/**/*.so
-            build-android/**/*.h
-            build-android/**/*.hpp
+            install-android/sdk/native/jni/include/**
+            install-android/sdk/native/libs/arm64-v8a/*.so
