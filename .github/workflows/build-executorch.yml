@@ -46,6 +46,16 @@ jobs:
           echo "ANDROID_SDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
 
+      - name: Install buck2
+        run: |
+          set -eux
+          BUCK2_VER=$(curl -sSL https://api.github.com/repos/facebook/buck2/releases/latest | jq -r '.tag_name')
+          curl -L -o buck2 "https://github.com/facebook/buck2/releases/download/${BUCK2_VER}/buck2-x86_64-unknown-linux-gnu"
+          chmod +x buck2
+          mkdir -p "$GITHUB_WORKSPACE/.local/bin"
+          mv buck2 "$GITHUB_WORKSPACE/.local/bin/buck2"
+          echo "BUCK2=$GITHUB_WORKSPACE/.local/bin/buck2" >> $GITHUB_ENV
+
       - name: Clone ExecuTorch
         run: git clone --recursive https://github.com/pytorch/executorch.git
 
