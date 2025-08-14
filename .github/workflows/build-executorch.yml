@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git cmake ninja-build python3 wget unzip curl jq
+          sudo apt-get install -y git cmake ninja-build python3 wget unzip curl jq zstd 
 
       - name: Install Android SDK/NDK
         run: |
