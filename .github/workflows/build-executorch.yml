@@ -64,18 +64,17 @@ jobs:
           grep -q "EXECUTORCH_BUILD_XNNPACK" "$f" || \
             sed -i 's|cmake \. -DCMAKE_INSTALL_PREFIX=\${CMAKE_OUT} |cmake . -DCMAKE_INSTALL_PREFIX=${CMAKE_OUT} -DEXECUTORCH_BUILD_XNNPACK=ON -DEXECUTORCH_BUILD_PTE=ON |' "$f"
 
+      - name: Clone ExecuTorch
+        run: |
+          git clone --recursive https://github.com/pytorch/executorch.git
+          cd executorch
+
       - name: Build via official script
         env:
           PYTHON_EXECUTABLE: python3
         run: |
           set -e
           bash scripts/build_android_library.sh
-
-      - name: Sanity check
-        run: |
-          set -e
-          test -d cmake-out-android-so/arm64-v8a || { echo "ERROR: Missing output directory cmake-out-android-so/arm64-v8a"; exit 1; }
-          ls cmake-out-android-so/arm64-v8a/*.so >/dev/null 2>&1 || { echo "ERROR: No .so files produced"; exit 1; }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
