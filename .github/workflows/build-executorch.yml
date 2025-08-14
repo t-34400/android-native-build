@@ -1,0 +1,74 @@
+name: build-executorch-android
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+jobs:
+  build-arm64:
+    runs-on: ubuntu-22.04
+    env:
+      ANDROID_ABI: arm64-v8a
+      ANDROID_PLATFORM: android-26       # minSdk=26
+      BUILD_TYPE: Release
+      EXECUTORCH_VER: v0.7.0
+    steps:
+      - name: Checkout (empty repo is OK)
+        uses: actions/checkout@v4
+
+      - name: Install Ninja & prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build git pkg-config python3
+
+      - name: Setup CMake 3.29+
+        uses: lukka/get-cmake@v3.30.3
+
+      - name: Setup Android NDK r27b
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+
+      - name: Clone ExecuTorch v0.7.0 with submodules
+        run: |
+          git clone --branch ${EXECUTORCH_VER} --depth 1 https://github.com/pytorch/executorch.git
+          cd executorch
+          git submodule update --init --recursive
+
+      - name: Configure (CMake)
+        working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cmake -S . -B build-android \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${ANDROID_ABI} \
+            -DANDROID_PLATFORM=${ANDROID_PLATFORM} \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DBUILD_TESTING=OFF \
+            -DEXECUTORCH_ENABLE_LOGGING=ON \
+            -DEXECUTORCH_LOG_LEVEL=Info \
+            -DEXECUTORCH_BUILD_XNNPACK=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
+            -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
+            -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF
+
+      - name: Build (CMake)
+        working-directory: executorch
+        run: cmake --build build-android -j
+
+      - name: Collect .so artifacts
+        working-directory: executorch
+        run: |
+          mkdir -p out/${ANDROID_ABI}
+          find build-android -name "*.so" -path "*/lib/*" -exec cp -v {} out/${ANDROID_ABI}/ \;
+          ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip out/${ANDROID_ABI}/*.so || true
+          ls -al out/${ANDROID_ABI}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executorch-android-${{ env.ANDROID_ABI }}
+          path: executorch/out/${{ env.ANDROID_ABI }}/*.so
