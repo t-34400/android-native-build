@@ -74,23 +74,30 @@ jobs:
           ABI=${ANDROID_ABI}
           API=${ANDROID_API}
           TOOL=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++
-
+      
           mkdir -p libs/${ABI}
-          mapfile -t LIBS < <(find build-android -type f -name '*.a' | sort)
+      
+          mapfile -t LIBS < <(
+            find build-android \
+              -type f -name '*.a' \
+              -not -path '*/third-party/flatcc_external_project/*' \
+              -print | sort
+          )
           if [ ${#LIBS[@]} -eq 0 ]; then
             echo "ERROR: No static libraries found." ; exit 2
           fi
-
+      
+          printf 'linking:\n%s\n' "${LIBS[@]}"
+      
           ${TOOL} -shared -fPIC \
             -Wl,--start-group "${LIBS[@]}" -Wl,--end-group \
             -o libs/${ABI}/libexecutorch_runtime.so \
             -llog -landroid -latomic -lc++_shared
-
+      
           mkdir -p jni/include
           rsync -a cmake-out-android/include/ jni/include/
-
+      
           ls -al libs/${ABI}
-          ls -al jni/include | head -n 50
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
