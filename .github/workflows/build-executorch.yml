@@ -42,30 +42,6 @@ jobs:
       - name: Clone ExecuTorch
         run: git clone --recursive https://github.com/pytorch/executorch.git
       
-      - name: Enable XNNPACK + PTE flags in script
-        working-directory: executorch
-        run: |
-          set -e
-          test -f scripts/build_android_library.sh || { echo "ERROR: scripts/build_android_library.sh not found."; exit 1; }
-          grep -q "EXECUTORCH_BUILD_XNNPACK" scripts/build_android_library.sh || \
-            sed -i 's|cmake \. -DCMAKE_INSTALL_PREFIX=\${CMAKE_OUT} |cmake . -DCMAKE_INSTALL_PREFIX=${CMAKE_OUT} -DEXECUTORCH_BUILD_XNNPACK=ON -DEXECUTORCH_BUILD_PTE=ON |' scripts/build_android_library.sh
-          awk '
-            {print}
-            /-B"\$\{CMAKE_OUT\}"/ && !p {
-              print "";
-              print "  # Use the buck2 path resolved by CMake; extract_sources.py calls `buck2` from PATH.";
-              print "  if [ -f \"${CMAKE_OUT}/CMakeCache.txt\" ]; then";
-              print "    BUCK2_PATH=\"$(sed -n '\''s/^BUCK2:FILEPATH=//p'\'' \"${CMAKE_OUT}/CMakeCache.txt\")\"";
-              print "    if [ -n \"${BUCK2_PATH}\" ] && [ -x \"${BUCK2_PATH}\" ]; then";
-              print "      export PATH=\"$(dirname \"${BUCK2_PATH}\"):${PATH}\"";
-              print "    fi";
-              print "  fi";
-              print "";
-              p=1
-            }
-          ' scripts/build_android_library.sh > scripts/build_android_library.sh.tmp && mv scripts/build_android_library.sh.tmp scripts/build_android_library.sh
-
-      
       - name: Build via official script
         working-directory: executorch
         env:
