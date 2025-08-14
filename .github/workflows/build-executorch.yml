@@ -1,0 +1,67 @@
+name: Build ExecuTorch (Android arm64, install)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
+      ANDROID_NDK_VERSION: 25.2.9519653
+      ANDROID_API: 26
+      ANDROID_ABI: arm64-v8a
+      CMAKE_VERSION: 3.22.1
+      ET_VERSION: v0.7.0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git cmake ninja-build python3 wget unzip
+
+      - name: Install Android cmdline-tools/SDK/NDK
+        run: |
+          mkdir -p "$ANDROID_SDK_ROOT"
+          cd "$ANDROID_SDK_ROOT"
+          wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          unzip cmdline-tools.zip -d cmdline-tools
+          mv cmdline-tools/cmdline-tools cmdline-tools/latest
+          yes | cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_SDK_ROOT" --licenses
+          yes | cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;34.0.0" \
+            "cmake;${CMAKE_VERSION}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+
+      - name: Get ExecuTorch sources (with submodules)
+        run: |
+          git clone --branch ${ET_VERSION} --recursive https://github.com/pytorch/executorch.git
+
+      - name: Configure (CMake)
+        run: |
+          cmake -S executorch -B build-android \
+            -G Ninja \
+            -D CMAKE_BUILD_TYPE=Release \
+            -D CMAKE_TOOLCHAIN_FILE="$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK_VERSION}/build/cmake/android.toolchain.cmake" \
+            -D ANDROID_ABI=${ANDROID_ABI} \
+            -D ANDROID_PLATFORM=android-${ANDROID_API} \
+            -D ANDROID_STL=c++_shared \
+            -D BUILD_SHARED_LIBS=ON \
+            -D EXECUTORCH_ENABLE_XNNPACK=ON \
+            -D EXECUTORCH_BUILD_PTE=ON \
+            -D CMAKE_INSTALL_PREFIX="${{ github.workspace }}/install-android"
+
+      - name: Build
+        run: cmake --build build-android -j"$(nproc)"
+
+      - name: Install
+        run: cmake --install build-android
+
+      - name: Upload installed SDK layout
+        uses: actions/upload-artifact@v4
+        with:
+          name: executorch-android-arm64-install
+          path: install-android/**
