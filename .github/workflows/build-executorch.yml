@@ -63,6 +63,15 @@ jobs:
         run: |
           git submodule sync
           git submodule update --init --recursive
+
+      - name: Install pip & Python deps for resolve_buck
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y python3-pip
+          python3 -m pip install --upgrade pip
+          # Install the Python module *zstd* (not zstandard)
+          python3 -m pip install zstd
       
       - name: Resolve correct buck2 for ExecuTorch
         working-directory: executorch
