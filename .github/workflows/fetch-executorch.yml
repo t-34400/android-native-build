@@ -44,7 +44,7 @@ jobs:
           mkdir -p libs/arm64-v8a
           unzip -j work/executorch.aar "jni/arm64-v8a/*.so" -d libs/arm64-v8a
       
-      - name: Fetch headers from GitHub tag
+      - name: Fetch headers from GitHub tag and stage into jni/include
         run: |
           set -euo pipefail
           TAG="v${VERSION}"
@@ -52,12 +52,24 @@ jobs:
             "https://github.com/pytorch/executorch/archive/refs/tags/${TAG}.tar.gz"
           mkdir -p work/src && tar -xzf "executorch-${TAG}.tar.gz" -C work/src
           SRC_DIR="$(echo work/src/executorch-*)"
-          if [ ! -d "${SRC_DIR}/include" ]; then
-            echo "ERROR: include directory not found in tag ${TAG}."
-            exit 1
-          fi
-          mkdir -p jni/include
-          rsync -a "${SRC_DIR}/include/" jni/include/
+      
+          stage_headers() {
+            src="$1"; dst="$2"
+            mkdir -p "$dst"
+            rsync -a --prune-empty-dirs \
+              --include='*/' --include='*.h' --exclude='*' \
+              "$src/" "$dst/"
+          }
+      
+          OUT="jni/include/executorch"
+          stage_headers "$SRC_DIR/runtime/core"        "$OUT/runtime/core"
+          stage_headers "$SRC_DIR/runtime/kernel"      "$OUT/runtime/kernel"
+          stage_headers "$SRC_DIR/runtime/platform"    "$OUT/runtime/platform"
+          stage_headers "$SRC_DIR/extension/kernel_util" "$OUT/extension/kernel_util"
+          stage_headers "$SRC_DIR/extension/tensor"    "$OUT/extension/tensor"
+          stage_headers "$SRC_DIR/extension/threadpool" "$OUT/extension/threadpool"
+      
+          test -d "$OUT/runtime/core" || { echo "ERROR: headers not staged."; exit 1; }
 
       - name: Include license files
         run: |
