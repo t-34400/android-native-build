@@ -1,4 +1,4 @@
-name: Build ExecuTorch (Android arm64, install)
+name: Build ExecuTorch (android-26, arm64)
 
 on:
   workflow_dispatch:
@@ -10,19 +10,20 @@ jobs:
       ANDROID_SDK_ROOT: ${{ github.workspace }}/android-sdk
       ANDROID_NDK_VERSION: 25.2.9519653
       ANDROID_API: 26
-      ANDROID_ABI: arm64-v8a
-      CMAKE_VERSION: 3.22.1
-      ET_VERSION: v0.7.0
+      ANDROID_ABIS: 'arm64-v8a'
+      EXECUTORCH_CMAKE_BUILD_TYPE: Release
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git cmake ninja-build python3 wget unzip
+          sudo apt-get install -y git cmake ninja-build python3 wget unzip curl jq
 
-      - name: Install Android cmdline-tools/SDK/NDK
+      - name: Install Android SDK/NDK
         run: |
           mkdir -p "$ANDROID_SDK_ROOT"
           cd "$ANDROID_SDK_ROOT"
@@ -33,35 +34,41 @@ jobs:
           yes | cmdline-tools/latest/bin/sdkmanager --sdk_root="$ANDROID_SDK_ROOT" \
             "platforms;android-${ANDROID_API}" \
             "build-tools;34.0.0" \
-            "cmake;${CMAKE_VERSION}" \
+            "cmake;3.22.1" \
             "ndk;${ANDROID_NDK_VERSION}"
+          echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK_VERSION}" >> $GITHUB_ENV
+          echo "ANDROID_SDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
 
-      - name: Get ExecuTorch sources (with submodules)
+      - name: Install buck2 (prebuilt)
         run: |
-          git clone --branch ${ET_VERSION} --recursive https://github.com/pytorch/executorch.git
+          set -e
+          ver=$(curl -s https://api.github.com/repos/facebook/buck2/releases/latest | jq -r .tag_name)
+          curl -LO "https://github.com/facebook/buck2/releases/download/${ver}/buck2-x86_64-unknown-linux-gnu"
+          sudo install -m 0755 buck2-x86_64-unknown-linux-gnu /usr/local/bin/buck2
+          buck2 --version
 
-      - name: Configure (CMake)
+      - name: Enable XNNPACK + PTE flags in script
         run: |
-          cmake -S executorch -B build-android \
-            -G Ninja \
-            -D CMAKE_BUILD_TYPE=Release \
-            -D CMAKE_TOOLCHAIN_FILE="$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK_VERSION}/build/cmake/android.toolchain.cmake" \
-            -D ANDROID_ABI=${ANDROID_ABI} \
-            -D ANDROID_PLATFORM=android-${ANDROID_API} \
-            -D ANDROID_STL=c++_shared \
-            -D BUILD_SHARED_LIBS=ON \
-            -D EXECUTORCH_ENABLE_XNNPACK=ON \
-            -D EXECUTORCH_BUILD_PTE=ON \
-            -D CMAKE_INSTALL_PREFIX="${{ github.workspace }}/install-android"
+          set -e
+          f="scripts/build_android_library.sh"
+          grep -q "EXECUTORCH_BUILD_XNNPACK" "$f" || \
+            sed -i 's|cmake \. -DCMAKE_INSTALL_PREFIX=\${CMAKE_OUT} |cmake . -DCMAKE_INSTALL_PREFIX=${CMAKE_OUT} -DEXECUTORCH_BUILD_XNNPACK=ON -DEXECUTORCH_BUILD_PTE=ON |' "$f"
 
-      - name: Build
-        run: cmake --build build-android -j"$(nproc)"
+      - name: Build via official script
+        env:
+          PYTHON_EXECUTABLE: python3
+        run: |
+          set -e
+          bash scripts/build_android_library.sh
 
-      - name: Install
-        run: cmake --install build-android
+      - name: Sanity check
+        run: |
+          set -e
+          test -d cmake-out-android-so/arm64-v8a || { echo "ERROR: Missing output directory cmake-out-android-so/arm64-v8a"; exit 1; }
+          ls cmake-out-android-so/arm64-v8a/*.so >/dev/null 2>&1 || { echo "ERROR: No .so files produced"; exit 1; }
 
-      - name: Upload installed SDK layout
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: executorch-android-arm64-install
-          path: install-android/**
+          name: executorch-android-arm64
+          path: cmake-out-android-so/arm64-v8a/*.so
