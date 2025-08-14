@@ -83,9 +83,7 @@ jobs:
       - name: Include license files
         run: |
           set -euo pipefail
-          rm -f dist
-          mkdir -p dist
-      
+
           SRC_DIR="$(find work/src -maxdepth 1 -type d -name 'executorch-*' -print -quit || true)"
       
           if [ -z "${SRC_DIR}" ] || [ ! -d "${SRC_DIR}" ]; then
