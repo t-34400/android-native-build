@@ -56,28 +56,26 @@ jobs:
       
           sudo install -m 0755 /tmp/buck2 /usr/local/bin/buck2
           buck2 --version || { echo "ERROR: buck2 does not run."; exit 1; }
-
+          
       - name: Clone ExecuTorch
-        run: |
-          git clone --recursive https://github.com/pytorch/executorch.git
-          cd executorch
-
+        run: git clone --recursive https://github.com/pytorch/executorch.git
+      
       - name: Enable XNNPACK + PTE flags in script
+        working-directory: executorch
         run: |
           set -e
-          f="scripts/build_android_library.sh"
-          grep -q "EXECUTORCH_BUILD_XNNPACK" "$f" || \
-            sed -i 's|cmake \. -DCMAKE_INSTALL_PREFIX=\${CMAKE_OUT} |cmake . -DCMAKE_INSTALL_PREFIX=${CMAKE_OUT} -DEXECUTORCH_BUILD_XNNPACK=ON -DEXECUTORCH_BUILD_PTE=ON |' "$f"
-
+          test -f scripts/build_android_library.sh || { echo "ERROR: scripts/build_android_library.sh not found."; exit 1; }
+          grep -q "EXECUTORCH_BUILD_XNNPACK" scripts/build_android_library.sh || \
+            sed -i 's|cmake \. -DCMAKE_INSTALL_PREFIX=\${CMAKE_OUT} |cmake . -DCMAKE_INSTALL_PREFIX=${CMAKE_OUT} -DEXECUTORCH_BUILD_XNNPACK=ON -DEXECUTORCH_BUILD_PTE=ON |' scripts/build_android_library.sh
+      
       - name: Build via official script
+        working-directory: executorch
         env:
           PYTHON_EXECUTABLE: python3
-        run: |
-          set -e
-          bash scripts/build_android_library.sh
-
+        run: bash scripts/build_android_library.sh
+      
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: executorch-android-arm64
-          path: cmake-out-android-so/arm64-v8a/*.so
+          path: executorch/cmake-out-android-so/arm64-v8a/*.so
