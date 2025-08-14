@@ -18,7 +18,9 @@ jobs:
       - name: Install Ninja & prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build git pkg-config python3
+          sudo apt-get install -y ninja-build git pkg-config python3 python3-pip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install zstd
 
       - name: Setup CMake 3.29+
         uses: lukka/get-cmake@v3.30.3
@@ -35,10 +37,17 @@ jobs:
           cd executorch
           git submodule update --init --recursive
 
+      - name: Install Ninja & prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build git pkg-config python3 python3-pip
+          python3 -m pip install --upgrade pip
+          python3 -m pip install zstd
+
       - name: Configure (CMake)
         working-directory: executorch
         env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }} 
         run: |
           cmake -S . -B build-android \
             -G Ninja \
@@ -51,6 +60,7 @@ jobs:
             -DEXECUTORCH_LOG_LEVEL=Info \
             -DEXECUTORCH_BUILD_XNNPACK=ON \
             -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \ 
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
             -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
             -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
