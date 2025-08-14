@@ -39,13 +39,19 @@ jobs:
           echo "ANDROID_NDK=$ANDROID_SDK_ROOT/ndk/${ANDROID_NDK_VERSION}" >> $GITHUB_ENV
           echo "ANDROID_SDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
 
-      - name: Install buck2 (prebuilt)
+      - name: Install buck2 (tag=latest)
         run: |
-          set -e
-          ver=$(curl -s https://api.github.com/repos/facebook/buck2/releases/latest | jq -r .tag_name)
-          curl -LO "https://github.com/facebook/buck2/releases/download/${ver}/buck2-x86_64-unknown-linux-gnu"
-          sudo install -m 0755 buck2-x86_64-unknown-linux-gnu /usr/local/bin/buck2
-          buck2 --version
+          set -euo pipefail
+          TAG="latest"
+          ASSET="buck2-x86_64-unknown-linux-gnu"
+          URL="https://github.com/facebook/buck2/releases/download/${TAG}/${ASSET}"
+      
+          curl -fL --retry 3 -o /tmp/buck2 "$URL" || { echo "ERROR: Failed to download $URL"; exit 1; }
+          [ -s /tmp/buck2 ] || { echo "ERROR: Downloaded buck2 is empty."; exit 1; }
+          file /tmp/buck2 | grep -q "ELF" || { echo "ERROR: buck2 is not an ELF binary."; exit 1; }
+      
+          sudo install -m 0755 /tmp/buck2 /usr/local/bin/buck2
+          buck2 --version || { echo "ERROR: buck2 does not run."; exit 1; }
 
       - name: Enable XNNPACK + PTE flags in script
         run: |
