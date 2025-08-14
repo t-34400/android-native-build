@@ -57,6 +57,7 @@ jobs:
           chmod +x "$GITHUB_WORKSPACE/.local/bin/buck2"
           "$GITHUB_WORKSPACE/.local/bin/buck2" --version
           echo "BUCK2=$GITHUB_WORKSPACE/.local/bin/buck2" >> $GITHUB_ENV
+          echo "$GITHUB_WORKSPACE/.local/bin" >> $GITHUB_PATH
 
       - name: Clone ExecuTorch
         run: git clone --recursive https://github.com/pytorch/executorch.git
