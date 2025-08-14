@@ -1,4 +1,4 @@
-name: Build OpenCV
+name: Build OpenCV (Android arm64, install)
 
 on:
   workflow_dispatch:
