@@ -57,17 +57,17 @@ jobs:
           sudo install -m 0755 /tmp/buck2 /usr/local/bin/buck2
           buck2 --version || { echo "ERROR: buck2 does not run."; exit 1; }
 
+      - name: Clone ExecuTorch
+        run: |
+          git clone --recursive https://github.com/pytorch/executorch.git
+          cd executorch
+
       - name: Enable XNNPACK + PTE flags in script
         run: |
           set -e
           f="scripts/build_android_library.sh"
           grep -q "EXECUTORCH_BUILD_XNNPACK" "$f" || \
             sed -i 's|cmake \. -DCMAKE_INSTALL_PREFIX=\${CMAKE_OUT} |cmake . -DCMAKE_INSTALL_PREFIX=${CMAKE_OUT} -DEXECUTORCH_BUILD_XNNPACK=ON -DEXECUTORCH_BUILD_PTE=ON |' "$f"
-
-      - name: Clone ExecuTorch
-        run: |
-          git clone --recursive https://github.com/pytorch/executorch.git
-          cd executorch
 
       - name: Build via official script
         env:
