@@ -83,11 +83,22 @@ jobs:
       - name: Include license files
         run: |
           set -euo pipefail
-          SRC_DIR="$(echo work/src/executorch-*)"
+          rm -f dist
           mkdir -p dist
-          for f in LICENSE LICENSE-binaries; do
-            [ -f "${SRC_DIR}/${f}" ] && cp "${SRC_DIR}/${f}" dist/
-          done
+      
+          SRC_DIR="$(find work/src -maxdepth 1 -type d -name 'executorch-*' -print -quit || true)"
+      
+          if [ -z "${SRC_DIR}" ] || [ ! -d "${SRC_DIR}" ]; then
+            echo "NOTE: source tree for headers not found; skipping license copy."
+            exit 0
+          fi
+      
+          if [ -f "${SRC_DIR}/LICENSE" ]; then
+            cp "${SRC_DIR}/LICENSE" dist/
+          fi
+          if [ -f "${SRC_DIR}/LICENSE-binaries" ]; then
+            cp "${SRC_DIR}/LICENSE-binaries" dist/
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
