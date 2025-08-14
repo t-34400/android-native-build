@@ -46,21 +46,32 @@ jobs:
           echo "ANDROID_SDK=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
           echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
 
-      - name: Install buck2
-        run: |
-          set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/.local/bin"
-          curl -fL \
-            -o buck2.zst \
-            https://github.com/facebook/buck2/releases/download/latest/buck2-x86_64-unknown-linux-gnu.zst
-          zstd -d buck2.zst -o "$GITHUB_WORKSPACE/.local/bin/buck2"
-          chmod +x "$GITHUB_WORKSPACE/.local/bin/buck2"
-          "$GITHUB_WORKSPACE/.local/bin/buck2" --version
-          echo "BUCK2=$GITHUB_WORKSPACE/.local/bin/buck2" >> $GITHUB_ENV
-          echo "$GITHUB_WORKSPACE/.local/bin" >> $GITHUB_PATH
-
       - name: Clone ExecuTorch
         run: git clone --recursive https://github.com/pytorch/executorch.git
+
+      - name: Ensure HOME / ANDROID_HOME / JDK 17
+        run: |
+          echo "HOME=${HOME:-$RUNNER_TEMP}" >> $GITHUB_ENV
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> $GITHUB_ENV
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      
+      - name: Sync submodules (be safe)
+        working-directory: executorch
+        run: |
+          git submodule sync
+          git submodule update --init --recursive
+      
+      - name: Resolve correct buck2 for ExecuTorch
+        working-directory: executorch
+        run: |
+          set -euo pipefail
+          B2_BIN="$(python3 tools/cmake/resolve_buck.py --cache_dir="$PWD/buck2-bin")"
+          test -x "$B2_BIN"
+          echo "BUCK2=$B2_BIN" >> "$GITHUB_ENV"
+          "$B2_BIN" --version
 
       - name: Build via official script
         working-directory: executorch
