@@ -1,0 +1,77 @@
+name: Fetch ExecuTorch arm64-v8a
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "ExecuTorch version tag (e.g. 0.7.0)"
+        required: true
+        default: "0.7.0"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare tools
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y curl unzip rsync
+
+      - name: Download AAR (+ sha256) from S3
+        run: |
+          set -euo pipefail
+          mkdir -p work
+          cd work
+          AAR_URL="https://ossci-android.s3.amazonaws.com/executorch/release/${VERSION}/executorch.aar"
+          SHAS_URL="https://ossci-android.s3.amazonaws.com/executorch/release/${VERSION}/executorch.aar.sha256sums"
+
+          curl -fL -o executorch.aar "${AAR_URL}"
+          if curl -fL -o executorch.aar.sha256sums "${SHAS_URL}"; then
+            sha256sum -c executorch.aar.sha256sums
+          else
+            echo "WARNING: Missing sha256sums for version ${VERSION} — skipping verification."
+          fi
+
+      - name: Extract .so from AAR (arm64-v8a only)
+        run: |
+          set -euo pipefail
+          mkdir -p libs/arm64-v8a
+          unzip -j work/executorch.aar "jni/arm64-v8a/*.so" -d libs/arm64-v8a
+      
+      - name: Fetch headers from GitHub tag
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          curl -fL -o "executorch-${TAG}.tar.gz" \
+            "https://github.com/pytorch/executorch/archive/refs/tags/${TAG}.tar.gz"
+          mkdir -p work/src && tar -xzf "executorch-${TAG}.tar.gz" -C work/src
+          SRC_DIR="$(echo work/src/executorch-*)"
+          if [ ! -d "${SRC_DIR}/include" ]; then
+            echo "ERROR: include directory not found in tag ${TAG}."
+            exit 1
+          fi
+          mkdir -p jni/include
+          rsync -a "${SRC_DIR}/include/" jni/include/
+
+      - name: Include license files
+        run: |
+          set -euo pipefail
+          SRC_DIR="$(echo work/src/executorch-*)"
+          for f in LICENSE LICENSE-binaries; do
+            [ -f "${SRC_DIR}/${f}" ] && cp "${SRC_DIR}/${f}" dist/
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: executorch-android-arm64-v8a-${{ env.VERSION }}
+          path: |
+            dist/jni
+            dist/libs
+            dist/LICENSE*
