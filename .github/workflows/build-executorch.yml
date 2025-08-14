@@ -24,6 +24,7 @@ jobs:
         uses: lukka/get-cmake@v3.30.3
 
       - name: Setup Android NDK r27b
+        id: ndk
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r27b
