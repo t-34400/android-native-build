@@ -1,100 +1,76 @@
-name: build-executorch-android
+name: Build OpenCV (Android arm64, install)
+
 on:
   workflow_dispatch:
-  push:
-    branches: [ main ]
 
 jobs:
-  build-arm64:
-    runs-on: ubuntu-22.04
-    env:
-      ANDROID_ABI: arm64-v8a
-      ANDROID_API: 26
-      BUILD_TYPE: Release
-      EXECUTORCH_VER: v0.7.0
-    steps:
-      - uses: actions/checkout@v4
+  build:
+    runs-on: ubuntu-latest
 
-      - name: Install prerequisites
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build git pkg-config python3 python3-pip rsync
-          python3 -m pip install --upgrade pip zstd
+          sudo apt-get install -y cmake ninja-build python3 git wget unzip
 
-      - name: Setup CMake 3.29+
-        uses: lukka/get-cmake@v3.30.3
-
-      - name: Setup Android NDK r27b
-        id: ndk
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: r27b
-
-      - name: Clone ExecuTorch ${EXECUTORCH_VER} with submodules
+      - name: Download Android SDK Command Line Tools
         run: |
-          git clone --branch ${EXECUTORCH_VER} --depth 1 https://github.com/pytorch/executorch.git
-          cd executorch
-          git submodule update --init --recursive
+          mkdir -p $HOME/android-sdk
+          cd $HOME/android-sdk
+          wget https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O cmdline-tools.zip
+          unzip cmdline-tools.zip -d cmdline-tools
+          mv cmdline-tools/cmdline-tools cmdline-tools/latest
+          yes | cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk --licenses
 
-      - name: Configure (core)
-        working-directory: executorch
-        env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+      - name: Install Android SDK / NDK
         run: |
-          cmake -S . -B build-android \
+          yes | $HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager --sdk_root=$HOME/android-sdk \
+            "platforms;android-26" \
+            "build-tools;34.0.0" \
+            "cmake;3.22.1" \
+            "ndk;25.2.9519653"
+
+      - name: Get OpenCV sources
+        run: |
+          git clone --branch 4.9.0 https://github.com/opencv/opencv.git
+          git clone --branch 4.9.0 https://github.com/opencv/opencv_contrib.git
+          cd opencv_contrib/modules
+          ls | grep -v -E 'ximgproc' | xargs rm -rf || true
+          cd ../..
+
+      - name: Configure CMake for Android (native only)
+        run: |
+          mkdir -p build-android
+          cmake -S opencv -B build-android \
             -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=${ANDROID_ABI} \
-            -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-            -DBUILD_TESTING=OFF \
-            -DEXECUTORCH_ENABLE_LOGGING=ON \
-            -DEXECUTORCH_LOG_LEVEL=Info \
-            -DEXECUTORCH_BUILD_XNNPACK=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
-            -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
-            -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF \
-            -DCMAKE_INSTALL_PREFIX=$PWD/cmake-out-android
-
-      - name: Build & Install (core)
-        working-directory: executorch
-        run: cmake --build build-android -j --target install
-
-      - name: Link shared runtime (.so) from static libs
-        working-directory: executorch
-        env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+            -D CMAKE_BUILD_TYPE=Release \
+            -D CMAKE_TOOLCHAIN_FILE=$HOME/android-sdk/ndk/25.2.9519653/build/cmake/android.toolchain.cmake \
+            -D ANDROID_ABI=arm64-v8a \
+            -D ANDROID_PLATFORM=android-26 \
+            -D BUILD_SHARED_LIBS=ON \
+            -D BUILD_opencv_java=OFF \
+            -D BUILD_TESTS=OFF -D BUILD_PERF_TESTS=OFF \
+            -D BUILD_EXAMPLES=OFF -D BUILD_ANDROID_EXAMPLES=OFF \
+            -D BUILD_ANDROID_PROJECTS=OFF \
+            -D OPENCV_EXTRA_MODULES_PATH=$GITHUB_WORKSPACE/opencv_contrib/modules \
+            -D BUILD_LIST=core,imgproc,calib3d,ximgproc,imgcodecs,highgui,videoio \
+            -D CMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install-android/sdk
+      
+      - name: Build
+        run: cmake --build build-android -j"$(nproc)"
+      
+      - name: Install (produce SDK layout)
         run: |
-          set -euo pipefail
-          ABI=${ANDROID_ABI}
-          API=${ANDROID_API}
-          TOOL=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++
+          cd build-android
+          cmake --install . --prefix ../install-android
 
-          mkdir -p libs/${ABI}
-          mapfile -t LIBS < <(find build-android -type f -name '*.a' | sort)
-          if [ ${#LIBS[@]} -eq 0 ]; then
-            echo "ERROR: No static libraries found." ; exit 2
-          fi
-
-          ${TOOL} -shared -fPIC \
-            -Wl,--start-group "${LIBS[@]}" -Wl,--end-group \
-            -o libs/${ABI}/libexecutorch_runtime.so \
-            -llog -landroid -latomic -lc++_shared
-
-          mkdir -p jni/include
-          rsync -a cmake-out-android/include/ jni/include/
-
-          ls -al libs/${ABI}
-          ls -al jni/include | head -n 50
-
-      - name: Upload artifact
+      - name: Upload artifacts (.so and headers)
         uses: actions/upload-artifact@v4
         with:
-          name: executorch-core-${{ env.ANDROID_ABI }}
+          name: opencv-android-arm64-native
           path: |
-            executorch/jni/include/**
-            executorch/libs/${{ env.ANDROID_ABI }}/libexecutorch_runtime.so
+            install-android/sdk/native/jni/include/**
+            install-android/sdk/native/libs/arm64-v8a/*.so
