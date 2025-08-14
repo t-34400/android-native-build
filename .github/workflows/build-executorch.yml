@@ -38,7 +38,7 @@ jobs:
       - name: Configure (CMake)
         working-directory: executorch
         env:
-          ANDROID_NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           cmake -S . -B build-android \
             -G Ninja \
@@ -62,10 +62,12 @@ jobs:
 
       - name: Collect .so artifacts
         working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           mkdir -p out/${ANDROID_ABI}
           find build-android -name "*.so" -path "*/lib/*" -exec cp -v {} out/${ANDROID_ABI}/ \;
-          ${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip out/${ANDROID_ABI}/*.so || true
+          ${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip out/${ANDROID_ABI}/*.so || true
           ls -al out/${ANDROID_ABI}
 
       - name: Upload artifact
