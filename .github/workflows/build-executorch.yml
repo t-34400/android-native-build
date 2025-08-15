@@ -53,41 +53,56 @@ jobs:
             -DANDROID_ABI=${ANDROID_ABI} \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
             -DCMAKE_TOOLCHAIN_FILE=${{ steps.ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
+            -DEXECUTORCH_ENABLE_LOGGING=ON \
+            -DEXECUTORCH_LOG_LEVEL=Info \
+            -DEXECUTORCH_BUILD_XNNPACK=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
             -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
-            -DEXECUTORCH_ENABLE_LOGGING=ON
+            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
+            -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
+            -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF
 
       - name: Build (Android)
         working-directory: executorch
         run: |
           cmake --build cmake-out-android --target executorch_runtime -j
 
-      - name: Stage headers and libs
+      # ---- Only this step is changed (header staging fix) ----
+      - name: Stage headers and libs (fixed)
         working-directory: executorch
         run: |
           mkdir -p jni/include/executorch
           mkdir -p libs/${ANDROID_ABI}
 
+          # 1) Copy ALL headers from the source tree first (prevents header drop)
           rsync -a --prune-empty-dirs \
             --include '*/' --include '*.h' --exclude '*' \
             executorch/ jni/include/executorch/
 
+          # 2) Overlay any generated/installed headers from the build tree
           if [ -d cmake-out-android/include/executorch ]; then
             rsync -a cmake-out-android/include/executorch/ jni/include/executorch/
           fi
 
+          # 3) Collect shared libraries from common build locations
           cp cmake-out-android/*.so libs/${ANDROID_ABI}/ 2>/dev/null || true
           if [ -d cmake-out-android/lib ]; then
             cp cmake-out-android/lib/*.so libs/${ANDROID_ABI}/ 2>/dev/null || true
           fi
 
+          # 4) Sanity checks (fail early if required headers are missing)
           test -f jni/include/executorch/runtime/executor/program.h || {
             echo "ERROR: required header missing: jni/include/executorch/runtime/executor/program.h"; exit 3;
           }
           test -f jni/include/executorch/extension/module/module.h || {
             echo "ERROR: required header missing: jni/include/executorch/extension/module/module.h"; exit 3;
           }
+
+          # (Optional) quick listings for debugging
           ls -al jni/include/executorch/runtime/executor || true
-          ls -al jni/include/executorch/extension/module || true
+          ls -al jni/include/executorch/extension || true
           ls -al libs/${ANDROID_ABI} || true
 
       - name: Upload artifact
@@ -96,4 +111,4 @@ jobs:
           name: executorch-core-${{ env.ANDROID_ABI }}
           path: |
             executorch/jni/include/**
-            executorch/libs/${{ env.ANDROID_ABI }}/*.so
+            executorch/libs/${{ env.ANDROID_ABI }}/libexecutorch_runtime.so
