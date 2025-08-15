@@ -78,16 +78,19 @@ jobs:
           set -euo pipefail
           SRC_BUILD="build-android"
           mkdir -p "$DEST_INCLUDE/executorch"
-          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' executorch/ "$DEST_INCLUDE/executorch/"
-          if [[ -d extension ]]; then
-            rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' extension/ "$DEST_INCLUDE/executorch/extension/"
+          if [[ -d executorch ]]; then
+            rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' executorch/ "$DEST_INCLUDE/executorch/"
+          else
+            for d in runtime extension schema kernels backends; do
+              [[ -d "$d" ]] && rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' "$d"/ "$DEST_INCLUDE/executorch/$d/"
+            done
           fi
-          ROOTS_REGEX='/(c10|ATen|torch|executorch|extension|kineto|onnx|fmt)/.*'
+          ROOTS_REGEX='/(c10|ATen|torch|executorch|extension|runtime|kineto|onnx|fmt)/.*'
           mapfile -t FILES < <(find "$SRC_BUILD" -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.pb.h' \) -not -path '*/CMakeFiles/*' | sort)
           for f in "${FILES[@]}"; do
             if [[ "$f" =~ $ROOTS_REGEX ]]; then
               rel="${BASH_REMATCH[0]}"
-              [[ "$rel" =~ ^/extension/ ]] && rel="/executorch$rel"
+              [[ "$rel" =~ ^/(extension|runtime)/ ]] && rel="/executorch$rel"
               dest="$DEST_INCLUDE$rel"
               mkdir -p "$(dirname "$dest")"
               cp -f "$f" "$dest"
@@ -101,7 +104,7 @@ jobs:
             fi
           fi
           test -f "$DEST_INCLUDE/executorch/runtime/executor/program.h" || { echo "ERROR: executorch/runtime/executor/program.h not found in $DEST_INCLUDE"; exit 2; }
-          
+
       - name: Link shared runtime (.so) from static libs
         working-directory: executorch
         env:
