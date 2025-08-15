@@ -69,6 +69,50 @@ jobs:
         run: |
           test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
           cmake --build build-android --config "$BUILD_TYPE" --target install
+
+      - name: Collect generated headers
+        working-directory: executorch
+        env:
+          DEST_INCLUDE: jni/include
+        run: |
+          set -euo pipefail
+          SRC_BUILD="build-android"
+          mkdir -p "$DEST_INCLUDE"
+      
+          ROOTS='(c10|ATen|torch|executorch|kineto|onnx|fmt)'
+      
+          mapfile -t FILES < <(find "$SRC_BUILD" -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' \) \
+                                 -not -path '*/CMakeFiles/*' -not -path '*/_deps/*' | sort)
+      
+          copied=0
+          skipped=0
+          for f in "${FILES[@]}"; do
+            rel="$(echo "$f" | sed -E "s|^.*(/${ROOTS}/.*)$|\\1|")"
+            if [[ "$rel" == /* ]]; then
+              dest="$DEST_INCLUDE$rel"
+              mkdir -p "$(dirname "$dest")"
+              cp -f "$f" "$dest"
+              copied=$((copied+1))
+            else
+              skipped=$((skipped+1))
+            fi
+          done
+      
+          if ! test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h"; then
+            extra="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
+            if [[ -n "${extra:-}" ]]; then
+              mkdir -p "$DEST_INCLUDE/c10/macros"
+              cp -f "$extra" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
+              copied=$((copied+1))
+            fi
+          fi
+      
+          echo "INFO: copied=$copied skipped=$skipped into $DEST_INCLUDE"
+      
+          if [[ $copied -eq 0 ]]; then
+            echo "ERROR: No generated headers were collected. Check build graph and roots list." >&2
+            exit 2
+          fi
           
       - name: Link shared runtime (.so) from static libs
         working-directory: executorch
