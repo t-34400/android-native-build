@@ -74,6 +74,7 @@ jobs:
         working-directory: executorch
         env:
           DEST_INCLUDE: jni/include
+          INCLUDE_DEPS: "1"
         run: |
           set -euo pipefail
           SRC_BUILD="build-android"
@@ -108,16 +109,28 @@ jobs:
           mkdir -p "$DEST_INCLUDE/c10"
           rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' "$C10_TOP"/ "$DEST_INCLUDE/c10/"
       
-          if ! test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h"; then
-            extra="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
-            if [[ -n "${extra:-}" ]]; then
-              mkdir -p "$DEST_INCLUDE/c10/macros"
-              cp -f "$extra" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
-            fi
+          HDR="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
+          if [[ -z "${HDR:-}" ]]; then
+            echo "ERROR: c10/macros/cmake_macros.h not generated." >&2
+            exit 2
+          fi
+          mkdir -p "$DEST_INCLUDE/c10/macros"
+          install -m 0644 -v "$HDR" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
+      
+          if [[ "${INCLUDE_DEPS}" == "1" ]] && [[ -d "$SRC_BUILD/_deps" ]]; then
+            mkdir -p "$DEST_INCLUDE/third_party"
+            while IFS= read -r inc; do
+              pkg="$(basename "$(dirname "$inc")")"
+              pkg="${pkg%-src}"; pkg="${pkg%-build}"; pkg="${pkg%-install}"
+              case "$pkg" in pytorch*|libtorch*|torch*|aten*|c10*) continue ;; esac
+              mkdir -p "$DEST_INCLUDE/third_party/$pkg"
+              rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' "$inc"/ "$DEST_INCLUDE/third_party/$pkg/"
+            done < <(find "$SRC_BUILD/_deps" -type d -name include | sort)
           fi
       
           test -f "$DEST_INCLUDE/executorch/runtime/executor/program.h" || { echo "ERROR: executorch/runtime/executor/program.h not found."; exit 2; }
           test -f "$DEST_INCLUDE/c10/util/irange.h" || { echo "ERROR: c10/util/irange.h not found in packaged headers."; exit 2; }
+          test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h" || { echo "ERROR: c10/macros/cmake_macros.h not found in packaged headers."; exit 2; }
 
       - name: Link shared runtime (.so) from static libs
         working-directory: executorch
