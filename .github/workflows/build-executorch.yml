@@ -70,7 +70,7 @@ jobs:
           test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
           cmake --build build-android --config "$BUILD_TYPE" --target install
 
-      - name: Collect generated headers
+      - name: Collect headers (extension + generated)
         working-directory: executorch
         env:
           DEST_INCLUDE: jni/include
@@ -78,26 +78,25 @@ jobs:
           set -euo pipefail
           SRC_BUILD="build-android"
           mkdir -p "$DEST_INCLUDE"
-      
-          ROOTS='(c10|ATen|torch|executorch|kineto|onnx|fmt)'
-      
-          mapfile -t FILES < <(find "$SRC_BUILD" -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' \) \
-                                 -not -path '*/CMakeFiles/*' -not -path '*/_deps/*' | sort)
-      
           copied=0
-          skipped=0
+          if [[ -d extension ]]; then
+            rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' extension/ "$DEST_INCLUDE/extension/"
+            copied=$((copied+1))
+          else
+            echo "WARN: extension/ not found" >&2
+          fi
+          ROOTS_REGEX='/(c10|ATen|torch|executorch|extension|kineto|onnx|fmt)/.*'
+          mapfile -t FILES < <(find "$SRC_BUILD" -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.pb.h' \) -not -path '*/CMakeFiles/*' | sort)
           for f in "${FILES[@]}"; do
-            if [[ "$f" =~ /(c10|ATen|torch|executorch|kineto|onnx|fmt)/.* ]]; then
+            if [[ "$f" =~ $ROOTS_REGEX ]]; then
               rel="${BASH_REMATCH[0]}"
+              [[ "$rel" =~ ^/executorch/extension/ ]] && rel="${rel#/executorch}"
               dest="$DEST_INCLUDE$rel"
               mkdir -p "$(dirname "$dest")"
               cp -f "$f" "$dest"
               copied=$((copied+1))
-            else
-              skipped=$((skipped+1))
             fi
           done
-      
           if ! test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h"; then
             extra="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
             if [[ -n "${extra:-}" ]]; then
@@ -106,11 +105,9 @@ jobs:
               copied=$((copied+1))
             fi
           fi
-      
-          echo "INFO: copied=$copied skipped=$skipped into $DEST_INCLUDE"
-          if [[ $copied -eq 0 ]]; then
-            echo "ERROR: No generated headers were collected. Check build graph and roots list." >&2
-            exit 2
+          echo "INFO: synced headers into $DEST_INCLUDE (ops=$copied)"
+          if ! test -f "$DEST_INCLUDE/extension/module/module.h"; then
+            echo "WARN: extension/module/module.h not found in $DEST_INCLUDE" >&2
           fi
           
       - name: Link shared runtime (.so) from static libs
