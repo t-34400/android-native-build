@@ -91,13 +91,14 @@ jobs:
         working-directory: executorch
         run: cmake --build cmake-android-out -j
 
-      - name: Stage outputs (include & libs)
+      - name: Package headers & libs
         working-directory: executorch
         env:
           ABI: ${{ env.ANDROID_ABI }}
         run: |
-          mkdir -p jni/include executorch/libs/${ABI}
-          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' executorch/ jni/include/executorch/
+          set -euo pipefail
+          mkdir -p jni/include libs/${ABI}
+          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
           find cmake-android-out -type f -name 'lib*.a' -print0 | xargs -0 -I{} cp -f {} libs/${ABI}/
 
       - name: Upload artifact
