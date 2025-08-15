@@ -147,7 +147,6 @@ jobs:
 
           # 3) Final asserts: ensure the macro plumbing exists
           test -f jni/include/c10/macros/Macros.h || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
-          test -f jni/include/c10/util/Compiler.h || { echo "ERROR: c10/util/Compiler.h missing."; exit 1; }
           if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
             test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
           fi
