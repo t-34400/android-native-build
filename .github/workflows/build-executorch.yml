@@ -14,16 +14,21 @@ jobs:
       EXECUTORCH_VER: v0.7.0
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Install prerequisites
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python deps
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build git pkg-config python3 python3-pip rsync
-          python3 -m pip install --upgrade pip zstd
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel setuptools ninja
           python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Setup CMake 3.29+
+      - name: Setup CMake
         uses: lukka/get-cmake@v3.30.3
 
       - name: Setup Android NDK r27b
@@ -38,91 +43,52 @@ jobs:
           cd executorch
           git submodule update --init --recursive
 
-      - name: Configure (core + extensions)
+      - name: Configure (Android)
         working-directory: executorch
-        env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
-          cmake -S . -B build-android \
+          cmake -S . -B cmake-out-android \
             -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DANDROID=ON \
             -DANDROID_ABI=${ANDROID_ABI} \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-            -DBUILD_TESTING=OFF \
-            -DEXECUTORCH_ENABLE_LOGGING=ON \
-            -DEXECUTORCH_LOG_LEVEL=Info \
-            -DEXECUTORCH_BUILD_XNNPACK=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
+            -DCMAKE_TOOLCHAIN_FILE=${{ steps.ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
             -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
-            -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
-            -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF \
-            -DCMAKE_INSTALL_PREFIX=$PWD/cmake-out-android
+            -DEXECUTORCH_ENABLE_LOGGING=ON
 
-      - name: Build & Install (core)
-        working-directory: executorch
-        run: cmake --build build-android -j --target install
-
-      - name: Link shared runtime (.so) from static libs
-        working-directory: executorch
-        env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
-        run: |
-          set -euo pipefail
-          ABI=${ANDROID_ABI}
-          API=${ANDROID_API}
-          TOOL=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++
-
-          mkdir -p libs/${ABI}
-
-          mapfile -t LIBS < <(
-            find build-android \
-              -type f -name '*.a' \
-              -not -path '*/third-party/flatcc_external_project/*' \
-              -print | sort
-          )
-          if [ ${#LIBS[@]} -eq 0 ]; then
-            echo "ERROR: No static libraries found." ; exit 2
-          fi
-
-          ${TOOL} -shared -fPIC \
-            -Wl,--start-group "${LIBS[@]}" -Wl,--end-group \
-            -o libs/${ABI}/libexecutorch_runtime.so \
-            -llog -landroid -latomic -lc++_shared
-
-      - name: Stage headers (install tree + extension/module)
+      - name: Build (Android)
         working-directory: executorch
         run: |
-          set -euo pipefail
-          # Install-tree headers
-          mkdir -p jni/include
-          rsync -a cmake-out-android/include/ jni/include/
+          cmake --build cmake-out-android --target executorch_runtime -j
 
-          # Add extension headers that are not installed by v0.7.0
-          # Copy only if directories exist.
-          for d in module data_loader runner_util; do
-            if [ -d "extension/${d}" ]; then
-              mkdir -p "jni/include/executorch/extension/${d}"
-              rsync -a "extension/${d}/" "jni/include/executorch/extension/${d}/"
-            fi
-          done
+      - name: Stage headers and libs
+        working-directory: executorch
+        run: |
+          mkdir -p jni/include/executorch
+          mkdir -p libs/${ANDROID_ABI}
 
-          # Ensure tensor extras as well (installed already, but safe to sync)
-          if [ -d "extension/tensor" ]; then
-            mkdir -p "jni/include/executorch/extension/tensor"
-            rsync -a "extension/tensor/" "jni/include/executorch/extension/tensor/"
+          rsync -a --prune-empty-dirs \
+            --include '*/' --include '*.h' --exclude '*' \
+            executorch/ jni/include/executorch/
+
+          if [ -d cmake-out-android/include/executorch ]; then
+            rsync -a cmake-out-android/include/executorch/ jni/include/executorch/
           fi
 
-          # Quick check for module.h
-          test -f jni/include/executorch/extension/module/module.h || {
-            echo "ERROR: module.h not found after staging." ; exit 3
+          cp cmake-out-android/*.so libs/${ANDROID_ABI}/ 2>/dev/null || true
+          if [ -d cmake-out-android/lib ]; then
+            cp cmake-out-android/lib/*.so libs/${ANDROID_ABI}/ 2>/dev/null || true
+          fi
+
+          test -f jni/include/executorch/runtime/executor/program.h || {
+            echo "ERROR: required header missing: jni/include/executorch/runtime/executor/program.h"; exit 3;
           }
-
-          ls -al jni/include/executorch/extension || true
-          ls -al libs/${ANDROID_ABI}
+          test -f jni/include/executorch/extension/module/module.h || {
+            echo "ERROR: required header missing: jni/include/executorch/extension/module/module.h"; exit 3;
+          }
+          ls -al jni/include/executorch/runtime/executor || true
+          ls -al jni/include/executorch/extension/module || true
+          ls -al libs/${ANDROID_ABI} || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -130,4 +96,4 @@ jobs:
           name: executorch-core-${{ env.ANDROID_ABI }}
           path: |
             executorch/jni/include/**
-            executorch/libs/${{ env.ANDROID_ABI }}/libexecutorch_runtime.so
+            executorch/libs/${{ env.ANDROID_ABI }}/*.so
