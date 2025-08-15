@@ -69,6 +69,38 @@ jobs:
         run: |
           test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
           cmake --build build-android --config "$BUILD_TYPE" --target install
+          
+      - name: Configure PyTorch (c10 only)
+        working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          set -euo pipefail
+          PT_SRC=""
+          if [ -d third_party/pytorch ]; then PT_SRC="third_party/pytorch"; fi
+          if [ -z "$PT_SRC" ] && [ -d third-party/pytorch ]; then PT_SRC="third-party/pytorch"; fi
+          [ -n "$PT_SRC" ] || { echo "ERROR: PyTorch submodule not found."; exit 2; }
+      
+          cmake -S "$PT_SRC" -B build-android/pytorch \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=${ANDROID_ABI} \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DBUILD_TESTING=OFF
+      
+          cmake --build build-android/pytorch --target c10
+      
+      - name: Ensure c10/cmake_macros.h
+        working-directory: executorch
+        env:
+          DEST_INCLUDE: jni/include
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEST_INCLUDE/c10/macros"
+          HDR="$(find build-android -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
+          [ -n "${HDR:-}" ] || { echo "ERROR: c10/macros/cmake_macros.h not generated."; exit 2; }
+          install -m 0644 -v "$HDR" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
 
       - name: Collect headers
         working-directory: executorch
