@@ -169,5 +169,5 @@ jobs:
         with:
           name: executorch-core-${{ env.ANDROID_ABI }}
           path: |
-            executorch/jni/include/**
+            executorch/sdk/include
             executorch/libs/${{ env.ANDROID_ABI }}/libexecutorch_runtime.so
