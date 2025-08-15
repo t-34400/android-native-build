@@ -33,7 +33,7 @@ jobs:
 
       - name: Prepare
         working-directory: executorch
-        run: bash install_requirements.sh --clean
+        run: bash ./install_executorch.sh --clean
 
       - name: Configure (Android + XNNPACK)
         working-directory: executorch
