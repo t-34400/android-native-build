@@ -16,14 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ninja-build git pkg-config python3 python3-pip rsync
-          python3 -m pip install --upgrade pip zstd
-          python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-      - name: Setup CMake 3.29+
+      - name: Setup CMake
         uses: lukka/get-cmake@v3.30.3
 
       - name: Setup Android NDK r27b
@@ -32,177 +25,46 @@ jobs:
         with:
           ndk-version: r27b
 
-      - name: Clone ExecuTorch ${{ env.EXECUTORCH_VER }} with submodules
+      - name: Clone ExecuTorch ${{ env.EXECUTORCH_VER }}
         run: |
           git clone --branch "${EXECUTORCH_VER}" --depth 1 https://github.com/pytorch/executorch.git
           cd executorch
           git submodule update --init --recursive
 
-      - name: Configure (core + extensions)
+      - name: Prepare
+        working-directory: executorch
+        run: bash install_requirements.sh --clean
+
+      - name: Configure (Android + XNNPACK)
         working-directory: executorch
         env:
           ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
-          cmake -S . -B build-android \
-            -G Ninja \
+          rm -rf cmake-android-out
+          cmake -S . -B cmake-android-out \
             -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${ANDROID_ABI} \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-            -DBUILD_TESTING=OFF \
-            -DEXECUTORCH_ENABLE_LOGGING=ON \
-            -DEXECUTORCH_LOG_LEVEL=Info \
-            -DEXECUTORCH_BUILD_XNNPACK=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
-            -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
-            -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF \
-            -DCMAKE_INSTALL_PREFIX=$PWD/jni \
-            -DCMAKE_INSTALL_INCLUDEDIR=include \
-            -DCMAKE_INSTALL_LIBDIR=libs/${ANDROID_ABI}
-            
-      - name: Configure PyTorch (c10 only)
+            -DEXECUTORCH_BUILD_XNNPACK=ON
+
+      - name: Build
+        working-directory: executorch
+        run: cmake --build cmake-android-out -j
+
+      - name: Stage outputs (include & libs)
         working-directory: executorch
         env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+          ABI: ${{ env.ANDROID_ABI }}
         run: |
-          set -euo pipefail
-          # candidates: submodule or FetchContent sources
-          PT_SRC=""
-          for p in \
-            third_party/pytorch \
-            third-party/pytorch \
-            $(find build-android -type d -name 'pytorch-src' -o -name 'pytorch*src' 2>/dev/null) \
-            $(cd . && dir="$(dirname "$(find . -type f -path '*/c10/CMakeLists.txt' | head -n1 || true)")"; [ -n "$dir" ] && cd "$dir/.." && pwd || true)
-          do
-            [ -n "$p" ] || continue
-            if [ -f "$p/c10/CMakeLists.txt" ]; then PT_SRC="$p"; break; fi
-          done
-          [ -n "$PT_SRC" ] || { echo "ERROR: PyTorch source tree with c10/CMakeLists.txt not found."; exit 2; }
-      
-          cmake -S "$PT_SRC" -B build-android/pytorch \
-            -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=${ANDROID_ABI} \
-            -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DBUILD_TESTING=OFF
-      
-          cmake --build build-android/pytorch --target c10
-      
-      - name: Ensure c10/cmake_macros.h
-        working-directory: executorch
-        env:
-          DEST_INCLUDE: jni/include
-        run: |
-          set -euo pipefail
-          mkdir -p "$DEST_INCLUDE/c10/macros"
-          HDR="$(find build-android -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
-          [ -n "${HDR:-}" ] || { echo "ERROR: c10/macros/cmake_macros.h not generated."; exit 2; }
-          install -m 0644 -v "$HDR" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
-            
-      - name: Build & Install ExecuTorch
-        working-directory: executorch
-        run: |
-          test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
-          cmake --build build-android --config "$BUILD_TYPE" --target install
-          
-      - name: Collect headers
-        working-directory: executorch
-        env:
-          DEST_INCLUDE: jni/include
-          INCLUDE_DEPS: "1"
-        run: |
-          set -euo pipefail
-          SRC_BUILD="build-android"
-          mkdir -p "$DEST_INCLUDE/executorch"
-      
-          if [[ -d executorch ]]; then
-            rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' executorch/ "$DEST_INCLUDE/executorch/"
-          else
-            for d in runtime extension schema kernels backends; do
-              [[ -d "$d" ]] && rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' "$d"/ "$DEST_INCLUDE/executorch/$d/"
-            done
-          fi
-      
-          ROOTS_REGEX='/(c10|ATen|torch|executorch|extension|runtime|kineto|onnx|fmt)/.*'
-          mapfile -t FILES < <(find "$SRC_BUILD" -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.pb.h' \) -not -path '*/CMakeFiles/*' | sort)
-          for f in "${FILES[@]}"; do
-            if [[ "$f" =~ $ROOTS_REGEX ]]; then
-              rel="${BASH_REMATCH[0]}"
-              [[ "$rel" =~ ^/(extension|runtime)/ ]] && rel="/executorch$rel"
-              dest="$DEST_INCLUDE$rel"
-              mkdir -p "$(dirname "$dest")"
-              cp -f "$f" "$dest"
-            fi
-          done
-      
-          C10_FILE="$(find . -type f -path '*/c10/util/irange.h' | head -n1 || true)"
-          if [[ -z "${C10_FILE:-}" ]]; then
-            echo "ERROR: c10/util/irange.h not found in repository." >&2
-            exit 2
-          fi
-          C10_TOP="$(dirname "$(dirname "$C10_FILE")")"
-          mkdir -p "$DEST_INCLUDE/c10"
-          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' "$C10_TOP"/ "$DEST_INCLUDE/c10/"
-      
-          HDR="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
-          if [[ -z "${HDR:-}" ]]; then
-            echo "ERROR: c10/macros/cmake_macros.h not generated." >&2
-            exit 2
-          fi
-          mkdir -p "$DEST_INCLUDE/c10/macros"
-          install -m 0644 -v "$HDR" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
-      
-          if [[ "${INCLUDE_DEPS}" == "1" ]] && [[ -d "$SRC_BUILD/_deps" ]]; then
-            mkdir -p "$DEST_INCLUDE/third_party"
-            while IFS= read -r inc; do
-              pkg="$(basename "$(dirname "$inc")")"
-              pkg="${pkg%-src}"; pkg="${pkg%-build}"; pkg="${pkg%-install}"
-              case "$pkg" in pytorch*|libtorch*|torch*|aten*|c10*) continue ;; esac
-              mkdir -p "$DEST_INCLUDE/third_party/$pkg"
-              rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' "$inc"/ "$DEST_INCLUDE/third_party/$pkg/"
-            done < <(find "$SRC_BUILD/_deps" -type d -name include | sort)
-          fi
-      
-          test -f "$DEST_INCLUDE/executorch/runtime/executor/program.h" || { echo "ERROR: executorch/runtime/executor/program.h not found."; exit 2; }
-          test -f "$DEST_INCLUDE/c10/util/irange.h" || { echo "ERROR: c10/util/irange.h not found in packaged headers."; exit 2; }
-          test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h" || { echo "ERROR: c10/macros/cmake_macros.h not found in packaged headers."; exit 2; }
+          mkdir -p jni/include executorch/libs/${ABI}
+          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' executorch/ jni/include/executorch/
+          find cmake-android-out -type f -name 'lib*.a' -print0 | xargs -0 -I{} cp -f {} libs/${ABI}/
 
-      - name: Link shared runtime (.so) from static libs
-        working-directory: executorch
-        env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
-        run: |
-          set -euo pipefail
-          ABI=${ANDROID_ABI}
-          API=${ANDROID_API}
-          TOOL=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++
-
-          mkdir -p libs/${ABI}
-
-          mapfile -t LIBS < <(
-            find build-android \
-              -type f -name '*.a' \
-              -not -path '*/third-party/flatcc_external_project/*' \
-              -print | sort
-          )
-          if [ ${#LIBS[@]} -eq 0 ]; then
-            echo "ERROR: No static libraries found." ; exit 2
-          fi
-
-          ${TOOL} -shared -fPIC \
-            -Wl,--start-group "${LIBS[@]}" -Wl,--end-group \
-            -o libs/${ABI}/libexecutorch_runtime.so \
-            -llog -landroid -latomic -lc++_shared
-
-      - name: Upload ExecuTorch runtime
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: executorch-core-${{ env.ANDROID_ABI }}
+          name: executorch-android-${{ env.ANDROID_ABI }}
           path: |
             executorch/jni/include
-            executorch/libs/${{ env.ANDROID_ABI }}/libexecutorch_runtime.so
+            executorch/libs/${{ env.ANDROID_ABI }}
