@@ -98,28 +98,43 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SRC_ROOT="$PWD"
+      
           BUILD_DIR="${BUILD_DIR:-cmake-out-android}"
           DEST_DIR="jni/include/executorch"
       
           mkdir -p "$DEST_DIR"
       
-          # Copy all headers from source tree first
-          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --exclude '*' \
-            "$SRC_ROOT/executorch/" "$DEST_DIR/"
+          copy_tree () {
+            local src="$1"
+            local dst="$2"
+            if [ -d "$src" ]; then
+              mkdir -p "$dst"
+              rsync -a --prune-empty-dirs --include '*/' --include '*.h' --exclude '*' "$src"/ "$dst"/
+            fi
+          }
       
-          # Overlay any generated/installed headers from the build tree
+          if [ -d "executorch" ]; then
+            copy_tree "executorch" "$DEST_DIR"
+          else
+            copy_tree "runtime"   "$DEST_DIR/runtime"
+            copy_tree "extension" "$DEST_DIR/extension"
+            copy_tree "kernels"   "$DEST_DIR/kernels"
+            copy_tree "backends"  "$DEST_DIR/backends"
+          fi
+      
           if [ -d "$BUILD_DIR/include/executorch" ]; then
             rsync -a "$BUILD_DIR/include/executorch/" "$DEST_DIR/"
           fi
       
-          # Sanity checks (English-only errors)
           test -f "$DEST_DIR/runtime/executor/program.h" || {
             echo "ERROR: required header missing: $DEST_DIR/runtime/executor/program.h"; exit 3;
           }
           test -f "$DEST_DIR/extension/module/module.h" || {
             echo "ERROR: required header missing: $DEST_DIR/extension/module/module.h"; exit 3;
           }
+      
+          ls -al "$DEST_DIR/runtime/executor" || true
+          ls -al "$DEST_DIR/extension/module" || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
