@@ -14,22 +14,16 @@ jobs:
       EXECUTORCH_VER: v0.7.0
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Python deps
+      - name: Install prerequisites
         run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install wheel setuptools ninja
-          python3 -m pip install tomli certifi
+          sudo apt-get update
+          sudo apt-get install -y ninja-build git pkg-config python3 python3-pip rsync
+          python3 -m pip install --upgrade pip zstd
           python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
-      - name: Setup CMake
+      - name: Setup CMake 3.29+
         uses: lukka/get-cmake@v3.30.3
 
       - name: Setup Android NDK r27b
@@ -44,16 +38,18 @@ jobs:
           cd executorch
           git submodule update --init --recursive
 
-      - name: Configure (Android)
+      - name: Configure (core + extensions)
         working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
-          cmake -S . -B cmake-out-android \
+          cmake -S . -B build-android \
             -G Ninja \
-            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-            -DANDROID=ON \
+            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
             -DANDROID_ABI=${ANDROID_ABI} \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DCMAKE_TOOLCHAIN_FILE=${{ steps.ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake \
+            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DBUILD_TESTING=OFF \
             -DEXECUTORCH_ENABLE_LOGGING=ON \
             -DEXECUTORCH_LOG_LEVEL=Info \
             -DEXECUTORCH_BUILD_XNNPACK=ON \
@@ -63,48 +59,67 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
             -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
             -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
-            -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF
+            -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF \
+            -DCMAKE_INSTALL_PREFIX=$PWD/cmake-out-android
 
-      - name: Build (Android)
+      - name: Build & Install (core)
         working-directory: executorch
-        run: |
-          cmake --build cmake-out-android --target executorch_runtime -j
+        run: cmake --build build-android -j --target install
 
-      # ---- Only this step is changed (header staging fix) ----
-      - name: Stage headers and libs (fixed)
+      - name: Link shared runtime (.so) from static libs
         working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
-          mkdir -p jni/include/executorch
-          mkdir -p libs/${ANDROID_ABI}
+          set -euo pipefail
+          ABI=${ANDROID_ABI}
+          API=${ANDROID_API}
+          TOOL=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++
 
-          # 1) Copy ALL headers from the source tree first (prevents header drop)
-          rsync -a --prune-empty-dirs \
-            --include '*/' --include '*.h' --exclude '*' \
-            executorch/ jni/include/executorch/
+          mkdir -p libs/${ABI}
 
-          # 2) Overlay any generated/installed headers from the build tree
-          if [ -d cmake-out-android/include/executorch ]; then
-            rsync -a cmake-out-android/include/executorch/ jni/include/executorch/
+          mapfile -t LIBS < <(
+            find build-android \
+              -type f -name '*.a' \
+              -not -path '*/third-party/flatcc_external_project/*' \
+              -print | sort
+          )
+          if [ ${#LIBS[@]} -eq 0 ]; then
+            echo "ERROR: No static libraries found." ; exit 2
           fi
 
-          # 3) Collect shared libraries from common build locations
-          cp cmake-out-android/*.so libs/${ANDROID_ABI}/ 2>/dev/null || true
-          if [ -d cmake-out-android/lib ]; then
-            cp cmake-out-android/lib/*.so libs/${ANDROID_ABI}/ 2>/dev/null || true
+          ${TOOL} -shared -fPIC \
+            -Wl,--start-group "${LIBS[@]}" -Wl,--end-group \
+            -o libs/${ABI}/libexecutorch_runtime.so \
+            -llog -landroid -latomic -lc++_shared
+
+      - name: Stage ExecuTorch headers
+        working-directory: executorch
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC_ROOT="$PWD"
+          BUILD_DIR="${BUILD_DIR:-cmake-out-android}"
+          DEST_DIR="jni/include/executorch"
+      
+          mkdir -p "$DEST_DIR"
+      
+          # Copy all headers from source tree first
+          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --exclude '*' \
+            "$SRC_ROOT/executorch/" "$DEST_DIR/"
+      
+          # Overlay any generated/installed headers from the build tree
+          if [ -d "$BUILD_DIR/include/executorch" ]; then
+            rsync -a "$BUILD_DIR/include/executorch/" "$DEST_DIR/"
           fi
-
-          # 4) Sanity checks (fail early if required headers are missing)
-          test -f jni/include/executorch/runtime/executor/program.h || {
-            echo "ERROR: required header missing: jni/include/executorch/runtime/executor/program.h"; exit 3;
+      
+          # Sanity checks (English-only errors)
+          test -f "$DEST_DIR/runtime/executor/program.h" || {
+            echo "ERROR: required header missing: $DEST_DIR/runtime/executor/program.h"; exit 3;
           }
-          test -f jni/include/executorch/extension/module/module.h || {
-            echo "ERROR: required header missing: jni/include/executorch/extension/module/module.h"; exit 3;
+          test -f "$DEST_DIR/extension/module/module.h" || {
+            echo "ERROR: required header missing: $DEST_DIR/extension/module/module.h"; exit 3;
           }
-
-          # (Optional) quick listings for debugging
-          ls -al jni/include/executorch/runtime/executor || true
-          ls -al jni/include/executorch/extension || true
-          ls -al libs/${ANDROID_ABI} || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
