@@ -49,9 +49,6 @@ jobs:
       - name: Upgrade pip build base
         run: python3 -m pip install -U "pip>=24" "setuptools>=70" "wheel>=0.43" "packaging>=24.2"
       
-      - name: Preinstall antlr4 runtime (wheel)
-        run: python3 -m pip install '--only-binary=:all:' 'antlr4-python3-runtime==4.9.3'
-      
       - name: Install ExecuTorch (Python)
         run: python3 -m pip install "executorch>=0.7,<0.8"
       
