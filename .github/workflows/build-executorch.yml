@@ -70,31 +70,27 @@ jobs:
           test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
           cmake --build build-android --config "$BUILD_TYPE" --target install
 
-      - name: Collect headers (extension + generated)
+      - name: Collect headers
         working-directory: executorch
         env:
           DEST_INCLUDE: jni/include
         run: |
           set -euo pipefail
           SRC_BUILD="build-android"
-          mkdir -p "$DEST_INCLUDE"
-          copied=0
+          mkdir -p "$DEST_INCLUDE/executorch"
+          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' executorch/ "$DEST_INCLUDE/executorch/"
           if [[ -d extension ]]; then
-            rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' extension/ "$DEST_INCLUDE/extension/"
-            copied=$((copied+1))
-          else
-            echo "WARN: extension/ not found" >&2
+            rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' extension/ "$DEST_INCLUDE/executorch/extension/"
           fi
           ROOTS_REGEX='/(c10|ATen|torch|executorch|extension|kineto|onnx|fmt)/.*'
           mapfile -t FILES < <(find "$SRC_BUILD" -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.pb.h' \) -not -path '*/CMakeFiles/*' | sort)
           for f in "${FILES[@]}"; do
             if [[ "$f" =~ $ROOTS_REGEX ]]; then
               rel="${BASH_REMATCH[0]}"
-              [[ "$rel" =~ ^/executorch/extension/ ]] && rel="${rel#/executorch}"
+              [[ "$rel" =~ ^/extension/ ]] && rel="/executorch$rel"
               dest="$DEST_INCLUDE$rel"
               mkdir -p "$(dirname "$dest")"
               cp -f "$f" "$dest"
-              copied=$((copied+1))
             fi
           done
           if ! test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h"; then
@@ -102,13 +98,9 @@ jobs:
             if [[ -n "${extra:-}" ]]; then
               mkdir -p "$DEST_INCLUDE/c10/macros"
               cp -f "$extra" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
-              copied=$((copied+1))
             fi
           fi
-          echo "INFO: synced headers into $DEST_INCLUDE (ops=$copied)"
-          if ! test -f "$DEST_INCLUDE/extension/module/module.h"; then
-            echo "WARN: extension/module/module.h not found in $DEST_INCLUDE" >&2
-          fi
+          test -f "$DEST_INCLUDE/executorch/runtime/executor/program.h" || { echo "ERROR: executorch/runtime/executor/program.h not found in $DEST_INCLUDE"; exit 2; }
           
       - name: Link shared runtime (.so) from static libs
         working-directory: executorch
