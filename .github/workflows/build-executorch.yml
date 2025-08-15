@@ -35,6 +35,49 @@ jobs:
         working-directory: executorch
         run: python3 -m pip install -r requirements-dev.txt
 
+      - name: Prepare c10 headers (single stage)
+        working-directory: executorch
+        shell: bash
+        run: |
+          set -euo pipefail
+      
+          mkdir -p jni/include
+      
+          VROOT=runtime/core/portable_type
+          if [ ! -d "${VROOT}/c10" ]; then
+            echo "ERROR: ${VROOT}/c10 not found." 1>&2
+            exit 1
+          fi
+          rsync -a "${VROOT}/" jni/include/
+      
+          if [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
+            GEN=$(find cmake-android-out -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)
+            if [ -n "${GEN:-}" ]; then
+              mkdir -p jni/include/c10/macros
+              cp -f "$GEN" jni/include/c10/macros/
+            else
+              tmpdir=$(mktemp -d)
+              pushd "$tmpdir" >/dev/null
+              git init pytorch >/dev/null
+              cd pytorch
+              git remote add origin https://github.com/pytorch/pytorch.git
+              git sparse-checkout init --cone
+              git sparse-checkout set c10/macros
+              git pull --depth 1 origin main >/dev/null
+              popd >/dev/null
+              cmake -S "$tmpdir/pytorch/c10/macros" -B "$tmpdir/_c10macros" >/dev/null
+              if [ ! -f "$tmpdir/_c10macros/cmake_macros.h" ]; then
+                echo "ERROR: Failed to generate c10/macros/cmake_macros.h." 1>&2
+                exit 1
+              fi
+              mkdir -p jni/include/c10/macros
+              cp -f "$tmpdir/_c10macros/cmake_macros.h" jni/include/c10/macros/
+              rm -rf "$tmpdir"
+            fi
+          fi
+      
+          test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing." 1>&2; exit 1; }
+
       - name: Prepare
         working-directory: executorch
         run: bash ./install_executorch.sh --clean
