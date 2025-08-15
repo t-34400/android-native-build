@@ -78,6 +78,7 @@ jobs:
           set -euo pipefail
           SRC_BUILD="build-android"
           mkdir -p "$DEST_INCLUDE/executorch"
+      
           if [[ -d executorch ]]; then
             rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' executorch/ "$DEST_INCLUDE/executorch/"
           else
@@ -85,6 +86,7 @@ jobs:
               [[ -d "$d" ]] && rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' "$d"/ "$DEST_INCLUDE/executorch/$d/"
             done
           fi
+      
           ROOTS_REGEX='/(c10|ATen|torch|executorch|extension|runtime|kineto|onnx|fmt)/.*'
           mapfile -t FILES < <(find "$SRC_BUILD" -type f \( -name '*.h' -o -name '*.hpp' -o -name '*.inc' -o -name '*.pb.h' \) -not -path '*/CMakeFiles/*' | sort)
           for f in "${FILES[@]}"; do
@@ -96,6 +98,16 @@ jobs:
               cp -f "$f" "$dest"
             fi
           done
+      
+          C10_FILE="$(find . -type f -path '*/c10/util/irange.h' | head -n1 || true)"
+          if [[ -z "${C10_FILE:-}" ]]; then
+            echo "ERROR: c10/util/irange.h not found in repository." >&2
+            exit 2
+          fi
+          C10_TOP="$(dirname "$(dirname "$C10_FILE")")"
+          mkdir -p "$DEST_INCLUDE/c10"
+          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --exclude '*' "$C10_TOP"/ "$DEST_INCLUDE/c10/"
+      
           if ! test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h"; then
             extra="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
             if [[ -n "${extra:-}" ]]; then
@@ -103,7 +115,9 @@ jobs:
               cp -f "$extra" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
             fi
           fi
-          test -f "$DEST_INCLUDE/executorch/runtime/executor/program.h" || { echo "ERROR: executorch/runtime/executor/program.h not found in $DEST_INCLUDE"; exit 2; }
+      
+          test -f "$DEST_INCLUDE/executorch/runtime/executor/program.h" || { echo "ERROR: executorch/runtime/executor/program.h not found."; exit 2; }
+          test -f "$DEST_INCLUDE/c10/util/irange.h" || { echo "ERROR: c10/util/irange.h not found in packaged headers."; exit 2; }
 
       - name: Link shared runtime (.so) from static libs
         working-directory: executorch
