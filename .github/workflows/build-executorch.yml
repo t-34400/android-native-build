@@ -53,20 +53,25 @@ jobs:
           echo "PYTHONNOUSERSITE=1" >> $GITHUB_ENV
           echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
       
-      - name: Check codegen imports
-        working-directory: executorch
-        run: |
-          python3 - <<'PY'
-          import executorch.codegen, torchgen
-          print("imports OK")
-          PY
-      
       - name: Force local sitecustomize (avoid /snap path)
         working-directory: executorch
         run: |
           : > sitecustomize.py
           echo "PYTHONNOUSERSITE=1" >> $GITHUB_ENV
-    
+          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
+      
+      - name: Check codegen imports
+        working-directory: executorch
+        run: |
+          python3 - <<'PY'
+          import os, sys
+          print("PYTHONPATH =", os.environ.get("PYTHONPATH"))
+          import executorch
+          import executorch.codegen
+          import torchgen
+          print("imports OK")
+          PY
+          
       - name: Configure (Android + XNNPACK)
         working-directory: executorch
         env:
