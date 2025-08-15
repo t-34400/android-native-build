@@ -26,6 +26,7 @@ jobs:
         run: |
           python3 -m pip install --upgrade pip
           python3 -m pip install wheel setuptools ninja
+          python3 -m pip install tomli certifi
           python3 -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Setup CMake
