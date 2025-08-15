@@ -50,16 +50,8 @@ jobs:
         working-directory: executorch
         run: |
           : > sitecustomize.py
-          echo "PYTHONNOUSERSITE=1" >> $GITHUB_ENV
           echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
-      
-      - name: Force local sitecustomize (avoid /snap path)
-        working-directory: executorch
-        run: |
-          : > sitecustomize.py
-          echo "PYTHONNOUSERSITE=1" >> $GITHUB_ENV
-          echo "PYTHONPATH=$(pwd)" >> $GITHUB_ENV
-      
+            
       - name: Check codegen imports
         working-directory: executorch
         run: |
