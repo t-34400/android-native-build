@@ -65,10 +65,11 @@ jobs:
             -DCMAKE_INSTALL_LIBDIR=libs/${ANDROID_ABI}
             
       - name: Build & Install ExecuTorch
+        working-directory: executorch
         run: |
-          cmake --build build --config $BUILD_TYPE
-          cmake --install build --prefix "${PWD}/executorch/install"
-      
+          test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
+          cmake --build build-android --config "$BUILD_TYPE" --target install
+          
       - name: Link shared runtime (.so) from static libs
         working-directory: executorch
         env:
