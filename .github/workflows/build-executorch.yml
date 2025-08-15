@@ -87,72 +87,50 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON
 
-      - name: Prepare c10 headers
+      - name: Prepare c10 headers (single stage, robust)
         working-directory: executorch
         shell: bash
         run: |
           set -euo pipefail
-      
           mkdir -p jni/include
-      
-          # Copy vendored c10 (avoid double c10/c10)
           VROOT=runtime/core/portable_type
           if [ ! -d "${VROOT}/c10" ]; then
             echo "ERROR: ${VROOT}/c10 not found." 1>&2
             exit 1
           fi
           rsync -a "${VROOT}/" jni/include/
-      
-          # If generated header is missing, try build tree first; else generate from .in
           if [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
             GEN=$(find cmake-android-out -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)
             if [ -n "${GEN:-}" ]; then
               mkdir -p jni/include/c10/macros
               cp -f "$GEN" jni/include/c10/macros/
             else
-              # Fetch only the template and run a minimal CMake with configure_file()
               tmpdir=$(mktemp -d)
               trap 'rm -rf "$tmpdir"' EXIT
-      
               git init "$tmpdir/pytorch" >/dev/null
-              cd "$tmpdir/pytorch"
-              git remote add origin https://github.com/pytorch/pytorch.git
-              git sparse-checkout init --cone
-              # Fetch only the template file to keep it light
-              git sparse-checkout set c10/macros/cmake_macros.h.in
-              git pull --depth 1 origin main >/dev/null
-              cd - >/dev/null
-      
+              git -C "$tmpdir/pytorch" remote add origin https://github.com/pytorch/pytorch.git
+              git -C "$tmpdir/pytorch" sparse-checkout init --cone
+              git -C "$tmpdir/pytorch" sparse-checkout set c10/macros
+              git -C "$tmpdir/pytorch" pull --depth 1 origin main >/dev/null
               SRC_IN="$tmpdir/pytorch/c10/macros/cmake_macros.h.in"
               if [ ! -f "$SRC_IN" ]; then
                 echo "ERROR: cmake_macros.h.in not found in sparse checkout." 1>&2
                 exit 1
               fi
-      
-              cat > "$tmpdir/CMakeLists.txt" <<'EOF'
-              cmake_minimum_required(VERSION 3.13)
-              project(gen_c10_macros C)
-              # SRC_IN: absolute path to c10/macros/cmake_macros.h.in
-              # DST_DIR: output directory
-              configure_file("${SRC_IN}" "${DST_DIR}/cmake_macros.h" @ONLY)
-              EOF
-      
-              cmake -S "$tmpdir" -B "$tmpdir/_b" \
-                -DSRC_IN="$SRC_IN" \
-                -DDST_DIR="$tmpdir/_out" >/dev/null
-      
+              printf '%s\n' \
+              'cmake_minimum_required(VERSION 3.13)' \
+              'project(gen_c10_macros C)' \
+              'configure_file("${SRC_IN}" "${DST_DIR}/cmake_macros.h" @ONLY)' \
+              > "$tmpdir/CMakeLists.txt"
+              cmake -S "$tmpdir" -B "$tmpdir/_b" -DSRC_IN="$SRC_IN" -DDST_DIR="$tmpdir/_out" >/dev/null
               if [ ! -f "$tmpdir/_out/cmake_macros.h" ]; then
                 echo "ERROR: Failed to generate c10/macros/cmake_macros.h." 1>&2
                 exit 1
               fi
-      
               mkdir -p jni/include/c10/macros
               cp -f "$tmpdir/_out/cmake_macros.h" jni/include/c10/macros/
-              echo "Generated: jni/include/c10/macros/cmake_macros.h"
             fi
           fi
-      
-          # Final assert
           test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing." 1>&2; exit 1; }
 
       - name: Build
