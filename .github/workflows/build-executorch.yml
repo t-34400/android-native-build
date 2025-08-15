@@ -12,6 +12,7 @@ jobs:
       ANDROID_API: 26
       BUILD_TYPE: Release
       EXECUTORCH_VER: v0.7.0
+
     steps:
       - uses: actions/checkout@v4
 
@@ -31,13 +32,13 @@ jobs:
         with:
           ndk-version: r27b
 
-      - name: Clone ExecuTorch ${EXECUTORCH_VER} with submodules
+      - name: Clone ExecuTorch ${{ env.EXECUTORCH_VER }} with submodules
         run: |
-          git clone --branch ${EXECUTORCH_VER} --depth 1 https://github.com/pytorch/executorch.git
+          git clone --branch "${EXECUTORCH_VER}" --depth 1 https://github.com/pytorch/executorch.git
           cd executorch
           git submodule update --init --recursive
 
-      - name: Configure (core)
+      - name: Configure (core + extensions)
         working-directory: executorch
         env:
           ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
@@ -74,9 +75,9 @@ jobs:
           ABI=${ANDROID_ABI}
           API=${ANDROID_API}
           TOOL=${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API}-clang++
-      
+
           mkdir -p libs/${ABI}
-      
+
           mapfile -t LIBS < <(
             find build-android \
               -type f -name '*.a' \
@@ -86,18 +87,42 @@ jobs:
           if [ ${#LIBS[@]} -eq 0 ]; then
             echo "ERROR: No static libraries found." ; exit 2
           fi
-      
-          printf 'linking:\n%s\n' "${LIBS[@]}"
-      
+
           ${TOOL} -shared -fPIC \
             -Wl,--start-group "${LIBS[@]}" -Wl,--end-group \
             -o libs/${ABI}/libexecutorch_runtime.so \
             -llog -landroid -latomic -lc++_shared
-      
+
+      - name: Stage headers (install tree + extension/module)
+        working-directory: executorch
+        run: |
+          set -euo pipefail
+          # Install-tree headers
           mkdir -p jni/include
           rsync -a cmake-out-android/include/ jni/include/
-      
-          ls -al libs/${ABI}
+
+          # Add extension headers that are not installed by v0.7.0
+          # Copy only if directories exist.
+          for d in module data_loader runner_util; do
+            if [ -d "extension/${d}" ]; then
+              mkdir -p "jni/include/executorch/extension/${d}"
+              rsync -a "extension/${d}/" "jni/include/executorch/extension/${d}/"
+            fi
+          done
+
+          # Ensure tensor extras as well (installed already, but safe to sync)
+          if [ -d "extension/tensor" ]; then
+            mkdir -p "jni/include/executorch/extension/tensor"
+            rsync -a "extension/tensor/" "jni/include/executorch/extension/tensor/"
+          fi
+
+          # Quick check for module.h
+          test -f jni/include/executorch/extension/module/module.h || {
+            echo "ERROR: module.h not found after staging." ; exit 3
+          }
+
+          ls -al jni/include/executorch/extension || true
+          ls -al libs/${ANDROID_ABI}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
