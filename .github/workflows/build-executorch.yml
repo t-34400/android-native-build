@@ -39,6 +39,12 @@ jobs:
         working-directory: executorch
         run: python3 -m pip install -r requirements-dev.txt
 
+      - name: Prepare PYTHONPATH (executorch & torchgen)
+        working-directory: executorch
+        run: |
+          : > sitecustomize.py
+          echo "PYTHONPATH=$PWD:$PWD/third_party/pytorch" >> $GITHUB_ENV
+
       - name: Configure (Android + XNNPACK)
         working-directory: executorch
         env:
