@@ -73,7 +73,7 @@ jobs:
       - name: Collect generated headers
         working-directory: executorch
         env:
-          DEST_INCLUDE: jni/include          # install/include 運用ならここを変更
+          DEST_INCLUDE: jni/include
         run: |
           set -euo pipefail
           SRC_BUILD="build-android"
@@ -98,7 +98,6 @@ jobs:
             fi
           done
       
-          # 保険：cmake_macros.h を明示コピー
           if ! test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h"; then
             extra="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
             if [[ -n "${extra:-}" ]]; then
@@ -146,5 +145,5 @@ jobs:
         with:
           name: executorch-core-${{ env.ANDROID_ABI }}
           path: |
-            executorch/install/include
+            executorch/jni/include
             executorch/libs/${{ env.ANDROID_ABI }}/libexecutorch_runtime.so
