@@ -73,7 +73,7 @@ jobs:
       - name: Collect generated headers
         working-directory: executorch
         env:
-          DEST_INCLUDE: jni/include
+          DEST_INCLUDE: jni/include          # install/include 運用ならここを変更
         run: |
           set -euo pipefail
           SRC_BUILD="build-android"
@@ -87,8 +87,8 @@ jobs:
           copied=0
           skipped=0
           for f in "${FILES[@]}"; do
-            rel="$(echo "$f" | sed -E "s|^.*(/${ROOTS}/.*)$|\\1|")"
-            if [[ "$rel" == /* ]]; then
+            if [[ "$f" =~ /(c10|ATen|torch|executorch|kineto|onnx|fmt)/.* ]]; then
+              rel="${BASH_REMATCH[0]}"
               dest="$DEST_INCLUDE$rel"
               mkdir -p "$(dirname "$dest")"
               cp -f "$f" "$dest"
@@ -98,6 +98,7 @@ jobs:
             fi
           done
       
+          # 保険：cmake_macros.h を明示コピー
           if ! test -f "$DEST_INCLUDE/c10/macros/cmake_macros.h"; then
             extra="$(find "$SRC_BUILD" -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
             if [[ -n "${extra:-}" ]]; then
@@ -108,7 +109,6 @@ jobs:
           fi
       
           echo "INFO: copied=$copied skipped=$skipped into $DEST_INCLUDE"
-      
           if [[ $copied -eq 0 ]]; then
             echo "ERROR: No generated headers were collected. Check build graph and roots list." >&2
             exit 2
