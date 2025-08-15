@@ -66,6 +66,77 @@ jobs:
         working-directory: executorch
         run: cmake --build build-android -j --target install
 
+      - name: Stage ExecuTorch headers
+        working-directory: executorch
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT="${OUT:-sdk}"
+          BUILD_DIR="${BUILD_DIR:-cmake-out-android}"
+          ABIS="${ABIS:-arm64-v8a}"
+      
+          rm -rf "$OUT"
+          mkdir -p "$OUT/include" "$OUT/libs"
+      
+          copy_hdrs () {
+            local src="$1" dst="$2"
+            [ -d "$src" ] || return 0
+            rsync -a --prune-empty-dirs \
+              --include '*/' \
+              --include '*.h' --include '*.hpp' --include '*.hh' --include '*.hxx' \
+              --include '*.inl' --include '*.inc' --include '*.cuh' \
+              --exclude '*' "$src"/ "$dst"/
+          }
+      
+          EXCLUDES='^(\.|\.git|\.github|docs|third-party|third_party|cmake-out-android|build|jni|libs|sdk)$'
+          for d in *; do
+            if [ -d "$d" ] && [[ ! "$d" =~ $EXCLUDES ]]; then
+              mkdir -p "$OUT/include/executorch/$d"
+              copy_hdrs "$d" "$OUT/include/executorch/$d"
+            fi
+          done
+      
+          while IFS= read -r -d '' pdir; do
+            base="$(basename "$pdir")"; parent="$(basename "$(dirname "$pdir")")"
+            if [ "$base" = "$parent" ]; then
+              mkdir -p "$OUT/include/$base"
+              copy_hdrs "$pdir" "$OUT/include/$base"
+            fi
+          done < <(find . -type d -path '*/portable_type/*/*' -print0)
+      
+          for tp in third-party third_party; do
+            [ -d "$tp" ] || continue
+            while IFS= read -r -d '' incdir; do
+              rsync -a --prune-empty-dirs \
+                --include '*/' \
+                --include '*.h' --include '*.hpp' --include '*.hh' --include '*.hxx' \
+                --include '*.inl' --include '*.inc' --include '*.cuh' \
+                --exclude '*' "$incdir"/ "$OUT/include"/
+            done < <(find "$tp" -type d -name include -print0)
+            if [ -d "$tp/pytorch/aten/src/ATen" ]; then
+              mkdir -p "$OUT/include/ATen"
+              copy_hdrs "$tp/pytorch/aten/src/ATen" "$OUT/include/ATen"
+            fi
+          done
+      
+          if [ -d "$BUILD_DIR/include" ]; then
+            rsync -a "$BUILD_DIR/include/"/ "$OUT/include/"/
+          fi
+      
+          for abi in $ABIS; do
+            abi_out="$OUT/libs/$abi"; mkdir -p "$abi_out"
+            var="BUILD_DIR_${abi//-/_}"; eval abi_build="\${$var:-$BUILD_DIR}"
+            [ -d "$abi_build" ] || continue
+            cp -f "$abi_build"/*.so "$abi_out"/ 2>/dev/null || true
+            if [ -d "$abi_build/lib" ]; then
+              cp -f "$abi_build/lib"/*.so "$abi_out"/ 2>/dev/null || true
+            fi
+          done
+      
+          test -f "$OUT/include/executorch/runtime/executor/program.h" || { echo "ERROR: missing $OUT/include/executorch/runtime/executor/program.h"; exit 3; }
+          test -f "$OUT/include/executorch/extension/module/module.h" || { echo "ERROR: missing $OUT/include/executorch/extension/module/module.h"; exit 3; }
+          test -f "$OUT/include/c10/util/irange.h" || { echo "ERROR: missing $OUT/include/c10/util/irange.h"; exit 3; }
+          
       - name: Link shared runtime (.so) from static libs
         working-directory: executorch
         env:
@@ -92,49 +163,6 @@ jobs:
             -Wl,--start-group "${LIBS[@]}" -Wl,--end-group \
             -o libs/${ABI}/libexecutorch_runtime.so \
             -llog -landroid -latomic -lc++_shared
-
-      - name: Stage ExecuTorch headers
-        working-directory: executorch
-        shell: bash
-        run: |
-          set -euo pipefail
-      
-          BUILD_DIR="${BUILD_DIR:-cmake-out-android}"
-          DEST_DIR="jni/include/executorch"
-      
-          mkdir -p "$DEST_DIR"
-      
-          copy_tree () {
-            local src="$1"
-            local dst="$2"
-            if [ -d "$src" ]; then
-              mkdir -p "$dst"
-              rsync -a --prune-empty-dirs --include '*/' --include '*.h' --exclude '*' "$src"/ "$dst"/
-            fi
-          }
-      
-          if [ -d "executorch" ]; then
-            copy_tree "executorch" "$DEST_DIR"
-          else
-            copy_tree "runtime"   "$DEST_DIR/runtime"
-            copy_tree "extension" "$DEST_DIR/extension"
-            copy_tree "kernels"   "$DEST_DIR/kernels"
-            copy_tree "backends"  "$DEST_DIR/backends"
-          fi
-      
-          if [ -d "$BUILD_DIR/include/executorch" ]; then
-            rsync -a "$BUILD_DIR/include/executorch/" "$DEST_DIR/"
-          fi
-      
-          test -f "$DEST_DIR/runtime/executor/program.h" || {
-            echo "ERROR: required header missing: $DEST_DIR/runtime/executor/program.h"; exit 3;
-          }
-          test -f "$DEST_DIR/extension/module/module.h" || {
-            echo "ERROR: required header missing: $DEST_DIR/extension/module/module.h"; exit 3;
-          }
-      
-          ls -al "$DEST_DIR/runtime/executor" || true
-          ls -al "$DEST_DIR/extension/module" || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
