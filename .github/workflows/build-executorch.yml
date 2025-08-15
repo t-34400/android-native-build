@@ -39,9 +39,27 @@ jobs:
         working-directory: executorch
         run: bash ./install_executorch.sh --clean
 
-      - name: Setup ExecuTorch host deps (pinned PyTorch+torchgen)
+      - name: Python deps for codegen/buck2
         working-directory: executorch
-        run: ./install_executorch.sh --use-pt-pinned-commit --minimal
+        run: python3 -m pip install -r requirements-dev.txt
+      
+      - name: Install PyTorch (CPU wheel)
+        run: python3 -m pip install --index-url https://download.pytorch.org/whl/test/cpu torch
+      
+      - name: Prepare PYTHONPATH and sitecustomize
+        working-directory: executorch
+        run: |
+          : > sitecustomize.py
+          echo "PYTHONNOUSERSITE=1" >> $GITHUB_ENV
+          echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
+      
+      - name: Check codegen imports
+        working-directory: executorch
+        run: |
+          python3 - <<'PY'
+          import executorch.codegen, torchgen
+          print("imports OK")
+          PY
       
       - name: Force local sitecustomize (avoid /snap path)
         working-directory: executorch
