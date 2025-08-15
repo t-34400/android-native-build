@@ -45,6 +45,9 @@ jobs:
       
       - name: Install PyTorch (CPU wheel)
         run: python3 -m pip install --index-url https://download.pytorch.org/whl/test/cpu torch
+
+      - name: Install ExecuTorch (Python package)
+        run: python3 -m pip install "executorch>=0.7,<0.8"
       
       - name: Prepare PYTHONPATH and sitecustomize
         working-directory: executorch
