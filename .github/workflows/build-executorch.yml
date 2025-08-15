@@ -60,18 +60,20 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_RUNNER_UTIL=ON \
             -DEXECUTORCH_BUILD_KERNELS_OPTIMIZED=ON \
             -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=OFF \
-            -DCMAKE_INSTALL_PREFIX=$PWD/cmake-out-android
-
+            -DCMAKE_INSTALL_PREFIX=$PWD/jni \
+            -DCMAKE_INSTALL_INCLUDEDIR=include \
+            -DCMAKE_INSTALL_LIBDIR=libs/${ANDROID_ABI}
+            
       - name: Build & Install (core)
         working-directory: executorch
-        run: cmake --build build-android -j --target install
+        run: cmake --build build-android --config ${BUILD_TYPE} --target install
 
       - name: Stage ExecuTorch headers
         working-directory: executorch
         shell: bash
         run: |
           set -euo pipefail
-          OUT="${OUT:-sdk}"
+          OUT="${OUT:-jni}"
           BUILD_DIR="${BUILD_DIR:-cmake-out-android}"
           ABIS="${ABIS:-arm64-v8a}"
       
@@ -169,5 +171,5 @@ jobs:
         with:
           name: executorch-core-${{ env.ANDROID_ABI }}
           path: |
-            executorch/sdk/include
+            executorch/jni/include
             executorch/libs/${{ env.ANDROID_ABI }}/libexecutorch_runtime.so
