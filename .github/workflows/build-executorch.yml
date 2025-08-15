@@ -64,22 +64,24 @@ jobs:
             -DCMAKE_INSTALL_INCLUDEDIR=include \
             -DCMAKE_INSTALL_LIBDIR=libs/${ANDROID_ABI}
             
-      - name: Build & Install ExecuTorch
-        working-directory: executorch
-        run: |
-          test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
-          cmake --build build-android --config "$BUILD_TYPE" --target install
-          
       - name: Configure PyTorch (c10 only)
         working-directory: executorch
         env:
           ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           set -euo pipefail
+          # candidates: submodule or FetchContent sources
           PT_SRC=""
-          if [ -d third_party/pytorch ]; then PT_SRC="third_party/pytorch"; fi
-          if [ -z "$PT_SRC" ] && [ -d third-party/pytorch ]; then PT_SRC="third-party/pytorch"; fi
-          [ -n "$PT_SRC" ] || { echo "ERROR: PyTorch submodule not found."; exit 2; }
+          for p in \
+            third_party/pytorch \
+            third-party/pytorch \
+            $(find build-android -type d -name 'pytorch-src' -o -name 'pytorch*src' 2>/dev/null) \
+            $(cd . && dir="$(dirname "$(find . -type f -path '*/c10/CMakeLists.txt' | head -n1 || true)")"; [ -n "$dir" ] && cd "$dir/.." && pwd || true)
+          do
+            [ -n "$p" ] || continue
+            if [ -f "$p/c10/CMakeLists.txt" ]; then PT_SRC="$p"; break; fi
+          done
+          [ -n "$PT_SRC" ] || { echo "ERROR: PyTorch source tree with c10/CMakeLists.txt not found."; exit 2; }
       
           cmake -S "$PT_SRC" -B build-android/pytorch \
             -G Ninja \
@@ -101,7 +103,13 @@ jobs:
           HDR="$(find build-android -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)"
           [ -n "${HDR:-}" ] || { echo "ERROR: c10/macros/cmake_macros.h not generated."; exit 2; }
           install -m 0644 -v "$HDR" "$DEST_INCLUDE/c10/macros/cmake_macros.h"
-
+            
+      - name: Build & Install ExecuTorch
+        working-directory: executorch
+        run: |
+          test -d build-android || { echo "ERROR: build-android not found. Run the Configure step first."; exit 2; }
+          cmake --build build-android --config "$BUILD_TYPE" --target install
+          
       - name: Collect headers
         working-directory: executorch
         env:
