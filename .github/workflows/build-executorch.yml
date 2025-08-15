@@ -87,84 +87,70 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON
 
-      - name: Prepare c10 headers (single stage, fetch .in with tag fallback)
+      - name: Prepare full c10
         working-directory: executorch
         shell: bash
+        env:
+          # Pin to a PyTorch ref that matches your ExecuTorch drop.
+          # You can change this to main or another tag if needed.
+          PYTORCH_REF: v2.4.0
         run: |
           set -euo pipefail
 
           mkdir -p jni/include
+          rm -rf jni/include/c10
 
-          # 1) Copy ExecuTorch vendored c10 (avoid double c10/c10)
-          VROOT=runtime/core/portable_type
-          if [ ! -d "${VROOT}/c10" ]; then
-            echo "ERROR: ${VROOT}/c10 not found." 1>&2
-            exit 1
+          # 1) Sparse-checkout the entire c10 tree from PyTorch at a pinned ref
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+
+          git init "$tmp/pt" >/dev/null
+          git -C "$tmp/pt" remote add origin https://github.com/pytorch/pytorch.git
+          git -C "$tmp/pt" sparse-checkout init --cone
+          git -C "$tmp/pt" sparse-checkout set c10
+
+          if git -C "$tmp/pt" fetch --depth 1 origin "$PYTORCH_REF" >/dev/null 2>&1; then
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          else
+            echo "WARN: PYTORCH_REF=${PYTORCH_REF} not found; falling back to main"
+            git -C "$tmp/pt" fetch --depth 1 origin main >/dev/null
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
           fi
-          rsync -a "${VROOT}/" jni/include/
 
-          # 2) If Macros.h already uses torch/headeronly, generation is not needed
-          if grep -q 'torch/headeronly/macros/Macros.h' jni/include/c10/macros/Macros.h 2>/dev/null; then
-            echo "Info: c10/macros/Macros.h uses torch/headeronly; no cmake_macros.h generation needed."
-            exit 0
+          # Copy the entire c10 (includes macros/, util/, core/, torch/headeronly/, etc.)
+          rsync -a "$tmp/pt/c10/" "jni/include/c10/"
+
+          # 2) Generate c10/macros/cmake_macros.h if Macros.h requires it
+          NEEDS_GEN=0
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h 2>/dev/null; then
+            NEEDS_GEN=1
           fi
 
-          # 3) If generated header is missing, try build tree first; else generate from .in
-          if [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
-            GEN=$(find cmake-android-out -type f -path '*/c10/macros/cmake_macros.h' | head -n1 || true)
-            if [ -n "${GEN:-}" ]; then
-              mkdir -p jni/include/c10/macros
-              cp -f "$GEN" jni/include/c10/macros/
-            else
-              # 3a) Sparse checkout PyTorch and pull only c10/macros; if missing on main, fallback to known tags
-              tmpdir=$(mktemp -d)
-              trap 'rm -rf "$tmpdir"' EXIT
-
-              git init "$tmpdir/pytorch" >/dev/null
-              git -C "$tmpdir/pytorch" remote add origin https://github.com/pytorch/pytorch.git
-              git -C "$tmpdir/pytorch" sparse-checkout init --cone
-              git -C "$tmpdir/pytorch" sparse-checkout set c10/macros
-
-              # Try main first, then fall back to tags where the file is known to exist
-              found_in=""
-              for ref in main v2.4.0 v2.3.1 v2.2.0; do
-                echo "Fetching PyTorch ref: $ref"
-                if git -C "$tmpdir/pytorch" fetch --depth 1 origin "$ref" >/dev/null 2>&1; then
-                  git -C "$tmpdir/pytorch" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
-                  test -f "$tmpdir/pytorch/c10/macros/cmake_macros.h.in" && { found_in="$ref"; break; }
-                fi
-              done
-              if [ -z "$found_in" ]; then
-                echo "ERROR: cmake_macros.h.in not found on main nor fallback tags (v2.4.0/v2.3.1/v2.2.0)." 1>&2
-                echo "       Your vendored c10 expects the legacy generated header, but upstream moved towards torch/headeronly." 1>&2
-                exit 1
-              fi
-              echo "Using cmake_macros.h.in from ref: $found_in"
-
-              SRC_IN="$tmpdir/pytorch/c10/macros/cmake_macros.h.in"
-
-              # 3b) Minimal CMake to run only configure_file()
+          if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
+            if [ -f "$tmp/pt/c10/macros/cmake_macros.h.in" ]; then
               printf '%s\n' \
                 'cmake_minimum_required(VERSION 3.13)' \
                 'project(gen_c10_macros C)' \
                 'configure_file("${SRC_IN}" "${DST}/cmake_macros.h" @ONLY)' \
-                > "$tmpdir/CMakeLists.txt"
-
-              cmake -S "$tmpdir" -B "$tmpdir/_b" -DSRC_IN="$SRC_IN" -DDST="$tmpdir/_out" >/dev/null
-
-              if [ ! -f "$tmpdir/_out/cmake_macros.h" ]; then
-                echo "ERROR: Failed to generate c10/macros/cmake_macros.h." 1>&2
-                exit 1
-              fi
-
+                > "$tmp/CMakeLists.txt"
+              cmake -S "$tmp" -B "$tmp/_b" \
+                    -DSRC_IN="$tmp/pt/c10/macros/cmake_macros.h.in" \
+                    -DDST="$tmp/_out" >/dev/null
+              test -f "$tmp/_out/cmake_macros.h" || { echo "ERROR: Failed to generate c10/macros/cmake_macros.h."; exit 1; }
               mkdir -p jni/include/c10/macros
-              cp -f "$tmpdir/_out/cmake_macros.h" jni/include/c10/macros/
+              cp -f "$tmp/_out/cmake_macros.h" jni/include/c10/macros/
               echo "Generated: jni/include/c10/macros/cmake_macros.h"
+            else
+              echo "WARN: cmake_macros.h.in not present at ${PYTORCH_REF}; Macros.h may be headeronly-based."
             fi
           fi
 
-          # 4) Final assert
-          test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing." 1>&2; exit 1; }
+          # 3) Final asserts: ensure the macro plumbing exists
+          test -f jni/include/c10/macros/Macros.h || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
+          test -f jni/include/c10/util/Compiler.h || { echo "ERROR: c10/util/Compiler.h missing."; exit 1; }
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
+            test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
+          fi
 
       - name: Build
         working-directory: executorch
