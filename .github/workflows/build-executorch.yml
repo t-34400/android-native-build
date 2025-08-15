@@ -35,6 +35,10 @@ jobs:
         working-directory: executorch
         run: bash ./install_executorch.sh --clean
 
+      - name: Install Python deps
+        working-directory: executorch
+        run: python3 -m pip install -r requirements-dev.txt
+
       - name: Configure (Android + XNNPACK)
         working-directory: executorch
         env:
@@ -46,7 +50,10 @@ jobs:
             -DANDROID_ABI=${ANDROID_ABI} \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
             -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
-            -DEXECUTORCH_BUILD_XNNPACK=ON
+            -DEXECUTORCH_BUILD_XNNPACK=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON
 
       - name: Build
         working-directory: executorch
