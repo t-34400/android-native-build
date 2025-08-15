@@ -98,7 +98,22 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p jni/include libs/${ABI}
+      
           rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
+      
+          VROOT=runtime/core/portable_type
+          if [ ! -d "${VROOT}/c10" ]; then
+            echo "ERROR: ${VROOT}/c10 not found (ExecuTorch vendored c10)." 1>&2
+            exit 1
+          fi
+          mkdir -p jni/include/c10
+          rsync -a "${VROOT}/c10/" jni/include/c10/
+      
+          if [ -d "${VROOT}/c10/torch/headeronly" ]; then
+            mkdir -p jni/include/c10/torch/headeronly
+            rsync -a "${VROOT}/c10/torch/headeronly/" jni/include/c10/torch/headeronly/
+          fi
+      
           find cmake-android-out -type f -name 'lib*.a' -print0 | xargs -0 -I{} cp -f {} libs/${ABI}/
 
       - name: Upload artifact
