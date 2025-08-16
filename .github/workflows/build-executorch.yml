@@ -96,9 +96,21 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
-          grep -q 'CMAKE_SYSTEM_NAME:STRING=Android' cmake-android-out/CMakeCache.txt || { echo "ERROR: Not Android toolchain"; exit 1; }
-          grep -q 'ANDROID_ABI:STRING=arm64-v8a' cmake-android-out/CMakeCache.txt || { echo "ERROR: Not arm64-v8a ABI"; exit 1; }
-
+            CACHE=cmake-android-out/CMakeCache.txt
+            grep -Eq 'CMAKE_SYSTEM_NAME:.*=Android' "$CACHE" || { echo "ERROR: Not Android toolchain"; exit 1; }
+            
+            # Accept ANDROID_ABI or CMAKE_ANDROID_ARCH_ABI
+            if ! grep -Eq '(ANDROID_ABI|CMAKE_ANDROID_ARCH_ABI):.*=arm64-v8a' "$CACHE"; then
+              echo "ERROR: Not arm64-v8a ABI"
+              exit 1
+            fi
+            
+            # Extra safety: compilers target aarch64-linux-android
+            if ! grep -Eq 'CMAKE_(C|CXX)_COMPILER_TARGET:.*aarch64-linux-android' "$CACHE"; then
+              echo "ERROR: Compiler target is not aarch64-linux-android"
+              exit 1
+            fi
+            
       - name: Prepare full c10
         working-directory: executorch
         shell: bash
