@@ -83,17 +83,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          HOST_BIN="linux-x86_64"
-          case "$(uname -s)" in
-            Darwin) HOST_BIN="darwin-x86_64" ;;
-            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
-          esac
-          SYSROOT="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/sysroot"
-          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
-
           rm -rf cmake-android-out
-
           cmake -S . -B cmake-android-out \
             -DCMAKE_SYSTEM_NAME=Android \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
@@ -106,10 +96,11 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
             -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
             -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON
-
-          echo "=== sanity dump (target flags) ==="
-          grep -E 'CMAKE_(C|CXX|ASM)_(COMPILER(_TARGET)?|FLAGS)' cmake-android-out/CMakeCache.txt || true
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            -DXNNPACK_BUILD_LIBRARY=ON \
+            -DXNNPACK_ENABLE_SUBGRAPH=ON \
+            -DCMAKE_C_FLAGS="-D__ANDROID__=1" \
+            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1"
 
       - name: Build
         working-directory: executorch
