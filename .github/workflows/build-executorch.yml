@@ -155,20 +155,15 @@ jobs:
         working-directory: executorch
         run: cmake --build cmake-android-out -j
 
-      - name: Package headers & libs (AArch64 filter; thin-archive safe)
+      - name: Package headers & libs (verify all members & de-thin)
         working-directory: executorch
         env:
           ABI: ${{ env.ANDROID_ABI }}
         shell: bash
         run: |
           set -euo pipefail
-
           mkdir -p jni/include "libs/${ABI}"
-
-          # Headers
           rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
-
-          # Pick NDK llvm tools (host-specific)
           HOST_BIN="linux-x86_64"
           case "$(uname -s)" in
             Darwin) HOST_BIN="darwin-x86_64" ;;
@@ -179,49 +174,47 @@ jobs:
           ARBIN="${TOOLBIN}/llvm-ar"
           command -v "$READOBJ" >/dev/null 2>&1 || READOBJ=llvm-readobj
           command -v "$ARBIN"   >/dev/null 2>&1 || ARBIN=llvm-ar
-
           copied=0
-
-          # Copy only AArch64 libs (.so/.a). For .a, handle thin archives by cd-ing into lib dir.
           while IFS= read -r -d '' lib; do
             base="$(basename "$lib")"
             dir="$(dirname "$lib")"
-
             if [[ "$base" == *.so ]]; then
               if "$READOBJ" --file-headers "$lib" | grep -q "Machine: AArch64"; then
-                echo "Copy SO (AArch64): $base"
-                cp -f "$lib" "libs/${ABI}/"
-                copied=$((copied+1))
-              else
-                echo "Skip SO (non-AArch64): $base"
+                cp -f "$lib" "libs/${ABI}/"; copied=$((copied+1))
               fi
-            elif [[ "$base" == *.a ]]; then
-              if (
-                set -e
-                cd "$dir"
-                first="$("$ARBIN" t "$base" | head -n1 || true)"
-                [[ -n "$first" ]] || exit 2
-                # Extract the first member next to the archive (works for thin & normal archives)
-                "$ARBIN" x "$base" "$first" >/dev/null 2>&1
-                [[ -f "$first" ]] || exit 3
-                "$READOBJ" --file-headers "$first" | grep -q "Machine: AArch64"
-                rm -f -- "$first"
-              ); then
-                echo "Copy AR (AArch64): $base"
-                cp -f "$lib" "libs/${ABI}/"
-                copied=$((copied+1))
-              else
-                echo "Skip AR (non-AArch64 or unreadable member): $base"
-              fi
+              continue
             fi
+            ok=1
+            tmp_extract="$(mktemp -d)"
+            tmp_new="$(mktemp -d)"
+            (
+              set -e
+              cd "$dir"
+              "$ARBIN" t "$base" > "$tmp_extract/list.txt"
+              if [[ ! -s "$tmp_extract/list.txt" ]]; then ok=0; exit 0; fi
+              while IFS= read -r obj; do
+                "$ARBIN" x "$base" "$obj" >/dev/null 2>&1 || { ok=0; break; }
+                [[ -f "$obj" ]] || { ok=0; break; }
+                if ! "$READOBJ" --file-headers "$obj" | grep -q "Machine: AArch64"; then ok=0; break; fi
+                mkdir -p "$tmp_new/objs/$(dirname "$obj")"
+                mv -f "$obj" "$tmp_new/objs/$obj"
+              done < "$tmp_extract/list.txt"
+              sed 's|^|rm -f -- |' "$tmp_extract/list.txt" | bash || true
+            )
+            if [[ "$ok" -eq 1 ]]; then
+              (
+                set -e
+                cd "$tmp_new/objs"
+                "$ARBIN" crs "$tmp_new/$base" $(find . -type f -name '*.o' -printf '%P\n')
+              )
+              cp -f "$tmp_new/$base" "libs/${ABI}/$base"; copied=$((copied+1))
+            fi
+            rm -rf "$tmp_extract" "$tmp_new"
           done < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
-
           if [[ $copied -eq 0 ]]; then
             echo "ERROR: No AArch64 libraries were packaged into libs/${ABI}." 1>&2
             exit 1
           fi
-
-          echo "Packaged $copied AArch64 libraries into libs/${ABI}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
