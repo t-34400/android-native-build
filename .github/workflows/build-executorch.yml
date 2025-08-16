@@ -124,7 +124,11 @@ jobs:
 
           echo "=== sanity dump (target flags) ==="
           grep -E 'CMAKE_(C|CXX|ASM)_(COMPILER(_TARGET)?|FLAGS)' cmake-android-out/CMakeCache.txt || true
-                        
+
+      - name: Build
+        working-directory: executorch
+        run: cmake --build cmake-android-out -j
+
       - name: Prepare full c10
         working-directory: executorch
         shell: bash
@@ -174,10 +178,6 @@ jobs:
           if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
             test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
           fi
-
-      - name: Build
-        working-directory: executorch
-        run: cmake --build cmake-android-out -j
 
       - name: Verify artifacts are AArch64
         working-directory: executorch
