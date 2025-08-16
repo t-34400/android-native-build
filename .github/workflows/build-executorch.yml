@@ -155,7 +155,7 @@ jobs:
         working-directory: executorch
         run: cmake --build cmake-android-out -j
 
-      - name: Package headers & libs (AArch64 filter; no explicit excludes)
+      - name: Package headers & libs (AArch64 filter; thin-archive safe)
         working-directory: executorch
         env:
           ABI: ${{ env.ANDROID_ABI }}
@@ -168,13 +168,13 @@ jobs:
           # Headers
           rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
 
-          # NDK llvm tools (fallback to PATH tools if not found)
+          # Pick NDK llvm tools (host-specific)
           HOST_BIN="linux-x86_64"
           case "$(uname -s)" in
             Darwin) HOST_BIN="darwin-x86_64" ;;
             MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
           esac
-          TOOLBIN="${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
+          TOOLBIN="${ANDROID_NDK_HOME:-/usr/local/lib/android/sdk/ndk}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
           READOBJ="${TOOLBIN}/llvm-readobj"
           ARBIN="${TOOLBIN}/llvm-ar"
           command -v "$READOBJ" >/dev/null 2>&1 || READOBJ=llvm-readobj
@@ -182,9 +182,10 @@ jobs:
 
           copied=0
 
-          # Copy only AArch64 libs (.a/.so)
+          # Copy only AArch64 libs (.so/.a). For .a, handle thin archives by cd-ing into lib dir.
           while IFS= read -r -d '' lib; do
             base="$(basename "$lib")"
+            dir="$(dirname "$lib")"
 
             if [[ "$base" == *.so ]]; then
               if "$READOBJ" --file-headers "$lib" | grep -q "Machine: AArch64"; then
@@ -195,23 +196,23 @@ jobs:
                 echo "Skip SO (non-AArch64): $base"
               fi
             elif [[ "$base" == *.a ]]; then
-              first_obj="$("$ARBIN" t "$lib" | head -n1 || true)"
-              if [[ -z "$first_obj" ]]; then
-                echo "Skip AR (empty?): $base"
-                continue
-              fi
-              tmpd="$(mktemp -d)"
-              trap 'rm -rf "$tmpd"' EXIT
-              (cd "$tmpd" && "$ARBIN" x "$lib" "$first_obj" >/dev/null 2>&1 || true)
-              if "$READOBJ" --file-headers "$tmpd/$first_obj" | grep -q "Machine: AArch64"; then
+              if (
+                set -e
+                cd "$dir"
+                first="$("$ARBIN" t "$base" | head -n1 || true)"
+                [[ -n "$first" ]] || exit 2
+                # Extract the first member next to the archive (works for thin & normal archives)
+                "$ARBIN" x "$base" "$first" >/dev/null 2>&1
+                [[ -f "$first" ]] || exit 3
+                "$READOBJ" --file-headers "$first" | grep -q "Machine: AArch64"
+                rm -f -- "$first"
+              ); then
                 echo "Copy AR (AArch64): $base"
                 cp -f "$lib" "libs/${ABI}/"
                 copied=$((copied+1))
               else
-                echo "Skip AR (non-AArch64): $base"
+                echo "Skip AR (non-AArch64 or unreadable member): $base"
               fi
-              rm -rf "$tmpd"
-              trap - EXIT
             fi
           done < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
 
