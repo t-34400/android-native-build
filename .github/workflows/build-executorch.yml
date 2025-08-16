@@ -155,16 +155,72 @@ jobs:
         working-directory: executorch
         run: cmake --build cmake-android-out -j
 
-      - name: Package headers & libs
+      - name: Package headers & libs (AArch64 filter; no explicit excludes)
         working-directory: executorch
         env:
           ABI: ${{ env.ANDROID_ABI }}
+        shell: bash
         run: |
           set -euo pipefail
-          mkdir -p jni/include libs/${ABI}
-      
+
+          mkdir -p jni/include "libs/${ABI}"
+
+          # Headers
           rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
-          find cmake-android-out -type f -name 'lib*.a' -print0 | xargs -0 -I{} cp -f {} libs/${ABI}/
+
+          # NDK llvm tools (fallback to PATH tools if not found)
+          HOST_BIN="linux-x86_64"
+          case "$(uname -s)" in
+            Darwin) HOST_BIN="darwin-x86_64" ;;
+            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
+          esac
+          TOOLBIN="${ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
+          READOBJ="${TOOLBIN}/llvm-readobj"
+          ARBIN="${TOOLBIN}/llvm-ar"
+          command -v "$READOBJ" >/dev/null 2>&1 || READOBJ=llvm-readobj
+          command -v "$ARBIN"   >/dev/null 2>&1 || ARBIN=llvm-ar
+
+          copied=0
+
+          # Copy only AArch64 libs (.a/.so)
+          while IFS= read -r -d '' lib; do
+            base="$(basename "$lib")"
+
+            if [[ "$base" == *.so ]]; then
+              if "$READOBJ" --file-headers "$lib" | grep -q "Machine: AArch64"; then
+                echo "Copy SO (AArch64): $base"
+                cp -f "$lib" "libs/${ABI}/"
+                copied=$((copied+1))
+              else
+                echo "Skip SO (non-AArch64): $base"
+              fi
+            elif [[ "$base" == *.a ]]; then
+              first_obj="$("$ARBIN" t "$lib" | head -n1 || true)"
+              if [[ -z "$first_obj" ]]; then
+                echo "Skip AR (empty?): $base"
+                continue
+              fi
+              tmpd="$(mktemp -d)"
+              trap 'rm -rf "$tmpd"' EXIT
+              (cd "$tmpd" && "$ARBIN" x "$lib" "$first_obj" >/dev/null 2>&1 || true)
+              if "$READOBJ" --file-headers "$tmpd/$first_obj" | grep -q "Machine: AArch64"; then
+                echo "Copy AR (AArch64): $base"
+                cp -f "$lib" "libs/${ABI}/"
+                copied=$((copied+1))
+              else
+                echo "Skip AR (non-AArch64): $base"
+              fi
+              rm -rf "$tmpd"
+              trap - EXIT
+            fi
+          done < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
+
+          if [[ $copied -eq 0 ]]; then
+            echo "ERROR: No AArch64 libraries were packaged into libs/${ABI}." 1>&2
+            exit 1
+          fi
+
+          echo "Packaged $copied AArch64 libraries into libs/${ABI}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
