@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: android/setup-ndk@v3
+      - uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r26d
