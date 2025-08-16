@@ -219,6 +219,11 @@ jobs:
             rm -rf "$tmp_extract" "$tmp_new"
           done < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
 
+          find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \)
+          llvm-readobj --file-headers path/to/libXXX.so | grep 'Machine'
+          grep -E 'CMAKE_SYSTEM_PROCESSOR|CMAKE_ANDROID_ARCH_ABI|CMAKE_C_COMPILER=' \
+            cmake-android-out/CMakeCache.txt
+
           if [[ $copied -eq 0 ]]; then
             echo "ERROR: No AArch64 libraries were packaged into libs/${ABI}." 1>&2; exit 1
           fi
