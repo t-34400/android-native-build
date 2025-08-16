@@ -165,7 +165,7 @@ jobs:
             test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
           fi
 
-      - name: Package headers & libs (arm64 only)
+      - name: Package headers & libs (arm64 only) — safe copy
         working-directory: executorch
         env:
           ABI: ${{ env.ANDROID_ABI }}
@@ -173,83 +173,42 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-      
-          mkdir -p jni/include "libs/${ABI}"
+          mkdir -p "jni/include" "libs/${ABI}"
+
           rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
-      
+
+          mapfile -d '' FILES < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
+          test "${#FILES[@]}" -gt 0 || { echo "ERROR: No libraries found under cmake-android-out."; exit 1; }
+          for f in "${FILES[@]}"; do
+            cp -f "$f" "libs/${ABI}/"
+          done
+
+      - name: Sanity check exported libs (symbols must exist)
+        working-directory: executorch
+        env:
+          ABI: ${{ env.ANDROID_ABI }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
           HOST_BIN="linux-x86_64"
-          case "$(uname -s)" in
-            Darwin) HOST_BIN="darwin-x86_64" ;;
-            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
-          esac
           TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
-      
-          if [[ -x "${TOOLBIN}/llvm-readobj" ]]; then
-            READOBJ="${TOOLBIN}/llvm-readobj"
-          elif command -v llvm-readobj >/dev/null 2>&1; then
-            READOBJ="$(command -v llvm-readobj)"
-          elif [[ -x "${TOOLBIN}/llvm-readelf" ]]; then
-            READOBJ="${TOOLBIN}/llvm-readelf"
-          else
-            echo "ERROR: llvm-readobj/llvm-readelf is not available." 1>&2; exit 1
-          fi
-      
-          if [[ -x "${TOOLBIN}/llvm-ar" ]]; then
-            ARBIN="${TOOLBIN}/llvm-ar"
-          elif command -v llvm-ar >/dev/null 2>&1; then
-            ARBIN="$(command -v llvm-ar)"
-          else
-            echo "ERROR: llvm-ar is not available." 1>&2; exit 1
-          fi
-      
-          is_aarch64() {
-            "$READOBJ" --file-headers "$1" 2>/dev/null | \
-              grep -Eq '(Machine:[[:space:]]*(AArch64|EM_AARCH64))|(Arch:[[:space:]]*aarch64)'
-          }
-      
-          copied=0
-          while IFS= read -r -d '' lib; do
-            base="$(basename "$lib")"; dir="$(dirname "$lib")"
-      
-            if [[ "$base" == *.so ]]; then
-              if is_aarch64 "$lib"; then
-                cp -f "$lib" "libs/${ABI}/"; copied=$((copied+1))
-              fi
-              continue
-            fi
-      
-            tmp_extract="$(mktemp -d)"; tmp_objs="$(mktemp -d)"
-            pushd "$dir" >/dev/null
-            if "$ARBIN" t "$base" > "$tmp_extract/list.txt"; then
-              mkdir -p "$tmp_objs/objs"
-              moved=0
-              while IFS= read -r obj; do
-                [[ -n "${obj:-}" ]] || continue
-                "$ARBIN" x "$base" "$obj" >/dev/null 2>&1 || continue
-                [[ -f "$obj" ]] || continue
-                if is_aarch64 "$obj"; then
-                  mkdir -p "$tmp_objs/objs/$(dirname "$obj")"
-                  mv -f "$obj" "$tmp_objs/objs/$obj"
-                  moved=$((moved+1))
-                else
-                  rm -f -- "$obj" || true
-                fi
-              done < "$tmp_extract/list.txt"
-            fi
-            popd >/dev/null
-      
-            if [[ "${moved:-0}" -gt 0 ]]; then
-              pushd "$tmp_objs/objs" >/dev/null
-              "$ARBIN" crs "$tmp_objs/$base" $(find . -type f -name '*.o' -printf '%P\n')
-              popd >/dev/null
-              cp -f "$tmp_objs/$base" "libs/${ABI}/$base"
-              copied=$((copied+1))
-            fi
-            rm -rf "$tmp_extract" "$tmp_objs"
-          done < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
-      
-          if [[ $copied -eq 0 ]]; then
-            echo "ERROR: No AArch64 libraries were packaged into libs/${ABI}." 1>&2; exit 1
+          NM="${TOOLBIN}/llvm-nm"
+
+          test -x "$NM" || { echo "ERROR: llvm-nm not found."; exit 1; }
+
+          LIBDIR="libs/${ABI}"
+          test -f "${LIBDIR}/libcpuinfo.a" || { echo "ERROR: libcpuinfo.a missing."; exit 1; }
+          test -f "${LIBDIR}/libXNNPACK.a" || { echo "ERROR: libXNNPACK.a missing."; exit 1; }
+
+          "$NM" -a "${LIBDIR}/libcpuinfo.a" | grep -q ' cpuinfo_arm_android_init' \
+            || { echo "ERROR: cpuinfo_arm_android_init missing in libcpuinfo.a"; exit 1; }
+          "$NM" -a "${LIBDIR}/libcpuinfo.a" | grep -q ' cpuinfo_isa' \
+            || { echo "ERROR: cpuinfo_isa missing in libcpuinfo.a"; exit 1; }
+
+          if "$NM" -a "${LIBDIR}/libXNNPACK.a" | grep -q ' xnn_insert_pack_lh_node\| xnn_define_pack_lh'; then
+            "$NM" -a "${LIBDIR}/libXNNPACK.a" | grep -q ' xnn_define_pack_lh' \
+              || { echo "ERROR: xnn_define_pack_lh missing in libXNNPACK.a"; exit 1; }
           fi
 
       - name: Upload artifact
