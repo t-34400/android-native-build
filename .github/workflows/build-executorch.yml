@@ -191,22 +191,27 @@ jobs:
           test -f "${LIBDIR}/libcpuinfo.a" || { echo "ERROR: libcpuinfo.a missing."; exit 1; }
           test -f "${LIBDIR}/libXNNPACK.a" || { echo "ERROR: libXNNPACK.a missing."; exit 1; }
 
-          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | grep -E '^[[:xdigit:]]+[[:space:]]+[Tt][[:space:]]+cpuinfo_(arm|aarch64)_(android|linux)_init' >/dev/null; then
-            echo "ERROR: cpuinfo *_init implementation missing (expected one of cpuinfo_arm|aarch64_{android|linux}_init as T/t) in libcpuinfo.a"
+          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | \
+               grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+cpuinfo_(arm|aarch64)_(android|linux)_init' >/dev/null; then
+            echo "ERROR: cpuinfo *_init implementation missing (expected one of cpuinfo_arm|aarch64_{android|linux}_init, not undefined) in libcpuinfo.a"
             exit 1
           fi
 
-          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | grep -E '^[[:xdigit:]]+[[:space:]]+[Tt][[:space:]]+cpuinfo_isa' >/dev/null; then
-            echo "ERROR: cpuinfo_isa missing (must be defined) in libcpuinfo.a"
+          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | \
+               grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+cpuinfo_isa$' >/dev/null; then
+            echo "ERROR: cpuinfo_isa missing (must be defined, not undefined) in libcpuinfo.a"
             exit 1
           fi
 
           if "$NM" -a "${LIBDIR}/libXNNPACK.a" | grep -E '(^|[[:space:]])U[[:space:]]+xnn_define_pack_lh' >/dev/null; then
-            if ! "$NM" -a "${LIBDIR}/libXNNPACK.a" | grep -E '^[[:xdigit:]]+[[:space:]]+[Tt][[:space:]]+xnn_define_pack_lh' >/dev/null; then
+            if ! "$NM" -a "${LIBDIR}/libXNNPACK.a" | \
+                 grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+xnn_define_pack_lh$' >/dev/null; then
               echo "ERROR: xnn_define_pack_lh missing (referenced but not defined) in libXNNPACK.a"
               exit 1
             fi
           fi
+
+          echo "Symbol sanity checks passed."
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
