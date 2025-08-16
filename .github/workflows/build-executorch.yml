@@ -96,22 +96,7 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
             -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
             -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
-            
-            CACHE=cmake-android-out/CMakeCache.txt
-            
-            # Android toolchain?
-            grep -Eq 'CMAKE_SYSTEM_NAME:.*=Android' "$CACHE" || { echo "ERROR: Not Android toolchain"; exit 1; }
-            
-            # ABI/arch?
-            grep -Eq '(ANDROID_ABI|CMAKE_ANDROID_ARCH_ABI):.*=arm64-v8a' "$CACHE" || { echo "ERROR: Not arm64-v8a ABI"; exit 1; }
-            grep -Eq 'CMAKE_SYSTEM_PROCESSOR:.*=aarch64' "$CACHE" || { echo "ERROR: System processor is not aarch64"; exit 1; }
-            
-            # Target triple is often embedded in flags, not in *_COMPILER_TARGET
-            if ! grep -Eq 'CMAKE_(C|CXX)_FLAGS:.*--target=aarch64-linux-android' "$CACHE"; then
-              echo "ERROR: --target=aarch64-linux-android not found in compiler flags"
-              exit 1
-            fi
-            
+                        
       - name: Prepare full c10
         working-directory: executorch
         shell: bash
@@ -165,6 +150,66 @@ jobs:
       - name: Build
         working-directory: executorch
         run: cmake --build cmake-android-out -j
+
+      - name: Verify artifacts are AArch64
+        working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Resolve tool paths
+          HOST_BIN="linux-x86_64"
+          case "$(uname -s)" in
+            Darwin) HOST_BIN="darwin-x86_64" ;;
+            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
+          esac
+          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
+          READOBJ="${TOOLBIN}/llvm-readobj"
+          ARBIN="${TOOLBIN}/llvm-ar"
+          command -v "$READOBJ" >/dev/null 2>&1 || READOBJ=llvm-readobj
+          command -v "$ARBIN"   >/dev/null 2>&1 || ARBIN=llvm-ar
+
+          # Collect libraries
+          mapfile -d '' libs < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
+          if [ "${#libs[@]}" -eq 0 ]; then
+            echo "ERROR: No libraries found under cmake-android-out"
+            exit 1
+          fi
+
+          bad=0
+          for f in "${libs[@]}"; do
+            # Check the library/so itself
+            if ! "$READOBJ" --file-headers "$f" | grep -q 'Machine: AArch64'; then
+              echo "ERROR: Non-AArch64 artifact: $f"
+              bad=1
+            fi
+
+            # For static archives, also check member objects
+            if [[ "$f" == *.a ]]; then
+              tmp="$(mktemp -d)"
+              pushd "$tmp" >/dev/null
+              mapfile -t members < <("$ARBIN" t "$OLDPWD/$f" || true)
+              for obj in "${members[@]}"; do
+                [ -n "$obj" ] || continue
+                "$ARBIN" x "$OLDPWD/$f" "$obj" >/dev/null 2>&1 || { echo "ERROR: Failed to extract $obj from $f"; bad=1; break; }
+                if ! "$READOBJ" --file-headers "$obj" | grep -q 'Machine: AArch64'; then
+                  echo "ERROR: Archive contains non-AArch64 object: $f -> $obj"
+                  bad=1
+                  break
+                fi
+              done
+              popd >/dev/null
+              rm -rf "$tmp"
+            fi
+          done
+
+          if [ "$bad" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "OK: All libraries (and archive members) are AArch64"
 
       - name: Package headers & libs (arm64 only)
         working-directory: executorch
