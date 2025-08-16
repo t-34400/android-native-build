@@ -1,98 +1,306 @@
-name: build-executorch-debug
-
+name: build-executorch-android
 on:
   workflow_dispatch:
   push:
     branches: [ main ]
-  pull_request:
 
 jobs:
-  android-arm64:
-    runs-on: ubuntu-latest
+  build-arm64:
+    runs-on: ubuntu-22.04
     env:
-      BUILD_DIR: executorch/cmake-android-out
+      ANDROID_ABI: arm64-v8a
+      ANDROID_API: 26
+      BUILD_TYPE: Release
+      EXECUTORCH_VER: v0.7.0
+
     steps:
       - uses: actions/checkout@v4
 
-      - uses: nttld/setup-ndk@v1
+      - name: Setup CMake
+        uses: lukka/get-cmake@v3.30.3
+
+      - name: Setup Android NDK r27b
         id: ndk
+        uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26d
+          ndk-version: r27b
 
-      - name: Set ANDROID_NDK
-        run: echo "ANDROID_NDK=${{ steps.ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-
-      - name: Show runner env
+      - name: Clone ExecuTorch ${{ env.EXECUTORCH_VER }}
         run: |
-          uname -a
-          cmake --version || true
-          echo "ANDROID_NDK=$ANDROID_NDK"
-          ls -al "$ANDROID_NDK/toolchains/llvm/prebuilt" || true
-          ls -al "$ANDROID_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin" | head -n 50 || true
+          git clone --branch "${EXECUTORCH_VER}" --depth 1 https://github.com/pytorch/executorch.git
+          cd executorch
+          git submodule update --init --recursive
 
-      - name: Install tools
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y jq
+      - name: Install Python deps
+        working-directory: executorch
+        run: python3 -m pip install -r requirements-dev.txt
 
-      - name: Clean build dir
-        run: |
-          rm -rf "$BUILD_DIR"
-          mkdir -p "$BUILD_DIR"
+      - name: Prepare
+        working-directory: executorch
+        run: bash ./install_executorch.sh --clean
 
-      - name: Configure (Android arm64)
+      - name: Python deps for codegen/buck2
+        working-directory: executorch
+        run: python3 -m pip install -r requirements-dev.txt
+
+      - name: Install PyTorch (CPU wheel for host-side tools)
+        run: python3 -m pip install --index-url https://download.pytorch.org/whl/test/cpu torch
+
+      - name: Upgrade pip build base
+        run: python3 -m pip install -U "pip>=24" "setuptools>=70" "wheel>=0.43" "packaging>=24.2"
+
+      - name: Install ExecuTorch (Python)
+        run: python3 -m pip install "executorch>=0.7,<0.8"
+
+      - name: Prepare PYTHONPATH and sitecustomize
         working-directory: executorch
         run: |
-          cmake -S . -B cmake-android-out \
-            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=26 \
-            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-            -DCMAKE_C_COMPILER_TARGET=aarch64-linux-android26 \
-            -DCMAKE_CXX_COMPILER_TARGET=aarch64-linux-android26 \
-            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
-            -DCMAKE_MESSAGE_LOG_LEVEL=VERBOSE -DCMAKE_RULE_MESSAGES=ON -DCMAKE_VERBOSE_MAKEFILE=ON
+          : > sitecustomize.py
+          echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
 
-      - name: Build (verbose)
+      - name: Check codegen imports
         working-directory: executorch
-        run: cmake --build cmake-android-out -v --parallel
+        run: |
+          python3 - <<'PY'
+          import os
+          print("PYTHONPATH =", os.environ.get("PYTHONPATH"))
+          import executorch, executorch.codegen, torchgen
+          print("imports OK")
+          PY
 
-      - name: Verify AArch64
+      - name: Hard clean any host-built artifacts
         working-directory: executorch
+        run: |
+          git clean -fdx -e cmake-android-out
+
+      - name: Configure (Android aarch64, force target/sysroot)
+        working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_ABI: arm64-v8a
+          ANDROID_API: 26
+          BUILD_TYPE: Release
+        shell: bash
         run: |
           set -euo pipefail
-          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+          HOST_BIN="linux-x86_64"
+          case "$(uname -s)" in
+            Darwin) HOST_BIN="darwin-x86_64" ;;
+            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
+          esac
+          SYSROOT="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/sysroot"
+          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
+
+          rm -rf cmake-android-out
+
+          # NOTE: do NOT export CC/CXX here; let toolchain drive them.
+          cmake -S . -B cmake-android-out \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DTHREADS_PREFER_PTHREAD_FLAG=ON \
+            -DEXECUTORCH_BUILD_EXECUTOR_RUNNER=OFF \
+            -DEXECUTORCH_BUILD_XNNPACK=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_SYSROOT="${SYSROOT}" \
+            -DCMAKE_FIND_ROOT_PATH="${SYSROOT}" \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
+            \
+            -DCMAKE_C_COMPILER="${TOOLBIN}/clang" \
+            -DCMAKE_CXX_COMPILER="${TOOLBIN}/clang++" \
+            -DCMAKE_ASM_COMPILER="${TOOLBIN}/clang" \
+            -DCMAKE_C_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
+            -DCMAKE_CXX_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}" \
+            -DCMAKE_ASM_COMPILER_TARGET="aarch64-linux-android${ANDROID_API}"
+
+          echo "=== sanity dump (target flags) ==="
+          grep -E 'CMAKE_(C|CXX|ASM)_(COMPILER(_TARGET)?|FLAGS)' cmake-android-out/CMakeCache.txt || true
+                        
+      - name: Prepare full c10
+        working-directory: executorch
+        shell: bash
+        env:
+          PYTORCH_REF: v2.4.0
+        run: |
+          set -euo pipefail
+          mkdir -p jni/include
+          rm -rf jni/include/c10
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          git init "$tmp/pt" >/dev/null
+          git -C "$tmp/pt" remote add origin https://github.com/pytorch/pytorch.git
+          git -C "$tmp/pt" sparse-checkout init --cone
+          git -C "$tmp/pt" sparse-checkout set c10
+          if git -C "$tmp/pt" fetch --depth 1 origin "$PYTORCH_REF" >/dev/null 2>&1; then
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          else
+            echo "WARN: PYTORCH_REF=${PYTORCH_REF} not found; falling back to main"
+            git -C "$tmp/pt" fetch --depth 1 origin main >/dev/null
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          fi
+          rsync -a "$tmp/pt/c10/" "jni/include/c10/"
+          NEEDS_GEN=0
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h 2>/dev/null; then
+            NEEDS_GEN=1
+          fi
+          if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
+            if [ -f "$tmp/pt/c10/macros/cmake_macros.h.in" ]; then
+              printf '%s\n' \
+                'cmake_minimum_required(VERSION 3.13)' \
+                'project(gen_c10_macros C)' \
+                'configure_file("${SRC_IN}" "${DST}/cmake_macros.h" @ONLY)' \
+                > "$tmp/CMakeLists.txt"
+              cmake -S "$tmp" -B "$tmp/_b" \
+                    -DSRC_IN="$tmp/pt/c10/macros/cmake_macros.h.in" \
+                    -DDST="$tmp/_out" >/dev/null
+              test -f "$tmp/_out/cmake_macros.h" || { echo "ERROR: Failed to generate c10/macros/cmake_macros.h."; exit 1; }
+              mkdir -p jni/include/c10/macros
+              cp -f "$tmp/_out/cmake_macros.h" jni/include/c10/macros/
+              echo "Generated: jni/include/c10/macros/cmake_macros.h"
+            else
+              echo "WARN: cmake_macros.h.in not present at ${PYTORCH_REF}; Macros.h may be headeronly-based."
+            fi
+          fi
+          test -f jni/include/c10/macros/Macros.h || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
+            test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
+          fi
+
+      - name: Build
+        working-directory: executorch
+        run: cmake --build cmake-android-out -j
+
+      - name: Verify artifacts are AArch64
+        working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Resolve tool paths
+          HOST_BIN="linux-x86_64"
+          case "$(uname -s)" in
+            Darwin) HOST_BIN="darwin-x86_64" ;;
+            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
+          esac
+          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
           READOBJ="${TOOLBIN}/llvm-readobj"
-          find cmake-android-out -type f \( -name "lib*.a" -o -name "lib*.so" \) -print0 |
-            xargs -0 -I{} bash -c '"$0" --file-headers "{}" | sed -n "1p;/Machine:/p"; echo --- "{}"' "$READOBJ" |
-            tee verify-machine.txt
-          awk '/^Machine: / && $2!="AArch64"{bad=1} END{exit bad}' verify-machine.txt
+          ARBIN="${TOOLBIN}/llvm-ar"
+          command -v "$READOBJ" >/dev/null 2>&1 || READOBJ=llvm-readobj
+          command -v "$ARBIN"   >/dev/null 2>&1 || ARBIN=llvm-ar
 
-      - name: Grep bad objects compile flags
-        if: ${{ failure() }}
+          # Collect libraries
+          mapfile -d '' libs < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
+          if [ "${#libs[@]}" -eq 0 ]; then
+            echo "ERROR: No libraries found under cmake-android-out"
+            exit 1
+          fi
+
+          bad=0
+          for f in "${libs[@]}"; do
+            # Check the library/so itself
+            if ! "$READOBJ" --file-headers "$f" | grep -q 'Machine: AArch64'; then
+              echo "ERROR: Non-AArch64 artifact: $f"
+              bad=1
+            fi
+
+            # For static archives, also check member objects
+            if [[ "$f" == *.a ]]; then
+              tmp="$(mktemp -d)"
+              pushd "$tmp" >/dev/null
+              mapfile -t members < <("$ARBIN" t "$OLDPWD/$f" || true)
+              for obj in "${members[@]}"; do
+                [ -n "$obj" ] || continue
+                "$ARBIN" x "$OLDPWD/$f" "$obj" >/dev/null 2>&1 || { echo "ERROR: Failed to extract $obj from $f"; bad=1; break; }
+                if ! "$READOBJ" --file-headers "$obj" | grep -q 'Machine: AArch64'; then
+                  echo "ERROR: Archive contains non-AArch64 object: $f -> $obj"
+                  bad=1
+                  break
+                fi
+              done
+              popd >/dev/null
+              rm -rf "$tmp"
+            fi
+          done
+
+          if [ "$bad" -ne 0 ]; then
+            exit 1
+          fi
+
+          echo "OK: All libraries (and archive members) are AArch64"
+
+      - name: Package headers & libs (arm64 only)
         working-directory: executorch
+        env:
+          ABI: ${{ env.ANDROID_ABI }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
         run: |
-          jq -r '.[].file + "\t" + .command' cmake-android-out/compile_commands.json |
-            grep -v -- '--target=aarch64-linux-android' || true
+          set -euo pipefail
+          mkdir -p jni/include "libs/${ABI}"
+          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
+          HOST_BIN="linux-x86_64"
+          case "$(uname -s)" in
+            Darwin) HOST_BIN="darwin-x86_64" ;;
+            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
+          esac
+          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
+          READOBJ="${TOOLBIN}/llvm-readobj"; ARBIN="${TOOLBIN}/llvm-ar"
+          command -v "$READOBJ" >/dev/null 2>&1 || READOBJ=llvm-readobj
+          command -v "$ARBIN"   >/dev/null 2>&1 || ARBIN=llvm-ar
 
-      - name: Dump CMake cache and logs
-        if: ${{ always() }}
-        working-directory: executorch
-        run: |
-          grep -E '^(CMAKE_SYSTEM_NAME|ANDROID_ABI|ANDROID_PLATFORM|CMAKE_TRY_COMPILE_TARGET_TYPE|CMAKE_C.._COMPILER_TARGET):' \
-            cmake-android-out/CMakeCache.txt || true
-          find cmake-android-out -maxdepth 3 -type f \( -name 'CMakeOutput.log' -o -name 'CMakeError.log' \) -print -exec tail -n +1 {} \; || true
+          copied=0
+          while IFS= read -r -d '' lib; do
+            base="$(basename "$lib")"; dir="$(dirname "$lib")"
+            if [[ "$base" == *.so ]]; then
+              "$READOBJ" --file-headers "$lib" | grep -q "Machine: AArch64" && { cp -f "$lib" "libs/${ABI}/"; copied=$((copied+1)); }
+              continue
+            fi
+            ok=1; moved=0
+            tmp_extract="$(mktemp -d)"; tmp_new="$(mktemp -d)"
+            pushd "$dir" >/dev/null
+            "$ARBIN" t "$base" > "$tmp_extract/list.txt" || ok=0
+            [[ -s "$tmp_extract/list.txt" ]] || ok=0
+            mkdir -p "$tmp_new/objs"
+            if [[ "$ok" -eq 1 ]]; then
+              while IFS= read -r obj; do
+                "$ARBIN" x "$base" "$obj" >/dev/null 2>&1 || { ok=0; break; }
+                [[ -f "$obj" ]] || { ok=0; break; }
+                "$READOBJ" --file-headers "$obj" | grep -q "Machine: AArch64" || { ok=0; break; }
+                mkdir -p "$tmp_new/objs/$(dirname "$obj")"
+                mv -f "$obj" "$tmp_new/objs/$obj"
+                moved=$((moved+1))
+              done < "$tmp_extract/list.txt"
+              sed 's|^|rm -f -- |' "$tmp_extract/list.txt" | bash || true
+            fi
+            popd >/dev/null
+            if [[ "$ok" -eq 1 && "$moved" -gt 0 ]]; then
+              pushd "$tmp_new/objs" >/dev/null
+              "$ARBIN" crs "$tmp_new/$base" $(find . -type f -name '*.o' -printf '%P\n')
+              popd >/dev/null
+              cp -f "$tmp_new/$base" "libs/${ABI}/$base"; copied=$((copied+1))
+            fi
+            rm -rf "$tmp_extract" "$tmp_new"
+          done < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
 
-      - name: Upload debug artifacts
-        if: ${{ always() }}
+          if [[ $copied -eq 0 ]]; then
+            echo "ERROR: No AArch64 libraries were packaged into libs/${ABI}." 1>&2; exit 1
+          fi
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-aarch64-debug
+          name: executorch-android-${{ env.ANDROID_ABI }}
           path: |
-            executorch/cmake-android-out/CMakeCache.txt
-            executorch/cmake-android-out/compile_commands.json
-            executorch/verify-machine.txt
-            **/CMakeFiles/CMakeOutput.log
-            **/CMakeFiles/CMakeError.log
+            executorch/jni/include
+            executorch/libs/${{ env.ANDROID_ABI }}
