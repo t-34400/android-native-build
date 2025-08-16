@@ -42,73 +42,78 @@ jobs:
       - name: Python deps for codegen/buck2
         working-directory: executorch
         run: python3 -m pip install -r requirements-dev.txt
-      
-      - name: Install PyTorch (CPU wheel)
+
+      - name: Install PyTorch (CPU wheel for host-side tools)
         run: python3 -m pip install --index-url https://download.pytorch.org/whl/test/cpu torch
 
       - name: Upgrade pip build base
         run: python3 -m pip install -U "pip>=24" "setuptools>=70" "wheel>=0.43" "packaging>=24.2"
-      
+
       - name: Install ExecuTorch (Python)
         run: python3 -m pip install "executorch>=0.7,<0.8"
-      
+
       - name: Prepare PYTHONPATH and sitecustomize
         working-directory: executorch
         run: |
           : > sitecustomize.py
           echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
-            
+
       - name: Check codegen imports
         working-directory: executorch
         run: |
           python3 - <<'PY'
-          import os, sys
+          import os
           print("PYTHONPATH =", os.environ.get("PYTHONPATH"))
-          import executorch
-          import executorch.codegen
-          import torchgen
+          import executorch, executorch.codegen, torchgen
           print("imports OK")
           PY
-          
-      - name: Configure (Android + XNNPACK)
+
+      - name: Hard clean any host-built artifacts
+        working-directory: executorch
+        run: |
+          git clean -fdx -e cmake-android-out
+
+      - name: Configure (force Android arm64)
         working-directory: executorch
         env:
           ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         run: |
+          set -euo pipefail
+          test -d "${ANDROID_NDK}/build/cmake" || { echo "ERROR: ANDROID_NDK invalid"; exit 1; }
           rm -rf cmake-android-out
           cmake -S . -B cmake-android-out \
-            -DCMAKE_TOOLCHAIN_FILE=${ANDROID_NDK}/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=${ANDROID_ABI} \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_ANDROID_NDK="${ANDROID_NDK}" \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DCMAKE_ANDROID_ARCH_ABI="${ANDROID_ABI}" \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
             -DEXECUTORCH_BUILD_XNNPACK=ON \
             -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
             -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
             -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
+          grep -q 'CMAKE_SYSTEM_NAME:STRING=Android' cmake-android-out/CMakeCache.txt || { echo "ERROR: Not Android toolchain"; exit 1; }
+          grep -q 'ANDROID_ABI:STRING=arm64-v8a' cmake-android-out/CMakeCache.txt || { echo "ERROR: Not arm64-v8a ABI"; exit 1; }
 
       - name: Prepare full c10
         working-directory: executorch
         shell: bash
         env:
-          # Pin to a PyTorch ref that matches your ExecuTorch drop.
-          # You can change this to main or another tag if needed.
           PYTORCH_REF: v2.4.0
         run: |
           set -euo pipefail
-
           mkdir -p jni/include
           rm -rf jni/include/c10
-
-          # 1) Sparse-checkout the entire c10 tree from PyTorch at a pinned ref
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
-
           git init "$tmp/pt" >/dev/null
           git -C "$tmp/pt" remote add origin https://github.com/pytorch/pytorch.git
           git -C "$tmp/pt" sparse-checkout init --cone
           git -C "$tmp/pt" sparse-checkout set c10
-
           if git -C "$tmp/pt" fetch --depth 1 origin "$PYTORCH_REF" >/dev/null 2>&1; then
             git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
           else
@@ -116,16 +121,11 @@ jobs:
             git -C "$tmp/pt" fetch --depth 1 origin main >/dev/null
             git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
           fi
-
-          # Copy the entire c10 (includes macros/, util/, core/, torch/headeronly/, etc.)
           rsync -a "$tmp/pt/c10/" "jni/include/c10/"
-
-          # 2) Generate c10/macros/cmake_macros.h if Macros.h requires it
           NEEDS_GEN=0
           if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h 2>/dev/null; then
             NEEDS_GEN=1
           fi
-
           if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
             if [ -f "$tmp/pt/c10/macros/cmake_macros.h.in" ]; then
               printf '%s\n' \
@@ -144,8 +144,6 @@ jobs:
               echo "WARN: cmake_macros.h.in not present at ${PYTORCH_REF}; Macros.h may be headeronly-based."
             fi
           fi
-
-          # 3) Final asserts: ensure the macro plumbing exists
           test -f jni/include/c10/macros/Macros.h || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
           if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
             test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
@@ -155,22 +153,22 @@ jobs:
         working-directory: executorch
         run: cmake --build cmake-android-out -j
 
-      - name: Package headers & libs (verify all members & de-thin)
+      - name: Package headers & libs (arm64 only)
         working-directory: executorch
         env:
           ABI: ${{ env.ANDROID_ABI }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p jni/include "libs/${ABI}"
           rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
-
           HOST_BIN="linux-x86_64"
           case "$(uname -s)" in
             Darwin) HOST_BIN="darwin-x86_64" ;;
             MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
           esac
-          TOOLBIN="${ANDROID_NDK_HOME:-/usr/local/lib/android/sdk/ndk}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
+          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
           READOBJ="${TOOLBIN}/llvm-readobj"; ARBIN="${TOOLBIN}/llvm-ar"
           command -v "$READOBJ" >/dev/null 2>&1 || READOBJ=llvm-readobj
           command -v "$ARBIN"   >/dev/null 2>&1 || ARBIN=llvm-ar
@@ -182,14 +180,12 @@ jobs:
               "$READOBJ" --file-headers "$lib" | grep -q "Machine: AArch64" && { cp -f "$lib" "libs/${ABI}/"; copied=$((copied+1)); }
               continue
             fi
-
             ok=1; moved=0
             tmp_extract="$(mktemp -d)"; tmp_new="$(mktemp -d)"
             pushd "$dir" >/dev/null
             "$ARBIN" t "$base" > "$tmp_extract/list.txt" || ok=0
             [[ -s "$tmp_extract/list.txt" ]] || ok=0
             mkdir -p "$tmp_new/objs"
-
             if [[ "$ok" -eq 1 ]]; then
               while IFS= read -r obj; do
                 "$ARBIN" x "$base" "$obj" >/dev/null 2>&1 || { ok=0; break; }
@@ -202,7 +198,6 @@ jobs:
               sed 's|^|rm -f -- |' "$tmp_extract/list.txt" | bash || true
             fi
             popd >/dev/null
-
             if [[ "$ok" -eq 1 && "$moved" -gt 0 ]]; then
               pushd "$tmp_new/objs" >/dev/null
               "$ARBIN" crs "$tmp_new/$base" $(find . -type f -name '*.o' -printf '%P\n')
