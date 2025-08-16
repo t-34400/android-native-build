@@ -73,29 +73,56 @@ jobs:
         run: |
           git clean -fdx -e cmake-android-out
 
-      - name: Configure (force Android arm64)
+      - name: Configure (force Android aarch64 toolchain)
         working-directory: executorch
         env:
           ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_ABI: arm64-v8a
+          ANDROID_API: 26
+          BUILD_TYPE: Release
+        shell: bash
         run: |
           set -euo pipefail
-          test -d "${ANDROID_NDK}/build/cmake" || { echo "ERROR: ANDROID_NDK invalid"; exit 1; }
+
+          # Use NDK target-specific wrapper compilers
+          HOST_BIN="linux-x86_64"
+          case "$(uname -s)" in
+            Darwin) HOST_BIN="darwin-x86_64" ;;
+            MINGW*|MSYS*|CYGWIN*) HOST_BIN="windows-x86_64" ;;
+          esac
+          TOOLBIN="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin"
+          export CC="${TOOLBIN}/aarch64-linux-android${ANDROID_API}-clang"
+          export CXX="${TOOLBIN}/aarch64-linux-android${ANDROID_API}-clang++"
+          export AR="${TOOLBIN}/llvm-ar"
+          export RANLIB="${TOOLBIN}/llvm-ranlib"
+          export STRIP="${TOOLBIN}/llvm-strip"
+
+          # Sanity: compilers must exist
+          test -x "$CC" && test -x "$CXX" || { echo "ERROR: aarch64 wrappers not found"; exit 1; }
+
           rm -rf cmake-android-out
           cmake -S . -B cmake-android-out \
             -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_ANDROID_NDK="${ANDROID_NDK}" \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DCMAKE_ANDROID_NDK="${ANDROID_NDK}" \
             -DANDROID_ABI="${ANDROID_ABI}" \
-            -DCMAKE_ANDROID_ARCH_ABI="${ANDROID_ABI}" \
             -DANDROID_PLATFORM=android-${ANDROID_API} \
             -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER="$CC" \
+            -DCMAKE_CXX_COMPILER="$CXX" \
+            -DCMAKE_ASM_COMPILER="$CC" \
+            -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
+            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY \
             -DEXECUTORCH_BUILD_XNNPACK=ON \
             -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
             -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
             -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-            -DCMAKE_FIND_ROOT_PATH_MODE_LIBRARY=ONLY \
-            -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=ONLY
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON
+
+          # Print the compilers CMake actually recorded
+          grep -E 'CMAKE_(C|CXX|ASM)_COMPILER(:|=)' cmake-android-out/CMakeCache.txt || true
                         
       - name: Prepare full c10
         working-directory: executorch
