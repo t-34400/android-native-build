@@ -84,7 +84,6 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf cmake-android-out
-          ls -l "${GITHUB_WORKSPACE}/executorch_selective_build/banet2d_xnn_ops.yml"
           cmake -S . -B cmake-android-out \
             -DCMAKE_SYSTEM_NAME=Android \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
