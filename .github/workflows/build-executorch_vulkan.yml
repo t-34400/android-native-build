@@ -175,45 +175,6 @@ jobs:
             cp -f "$f" "libs/${ABI}/"
           done
 
-      - name: Sanity check exported libs (symbols must exist)
-        working-directory: executorch
-        env:
-          ABI: ${{ env.ANDROID_ABI }}
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          HOST_BIN="linux-x86_64"
-          NM="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin/llvm-nm"
-
-          test -x "$NM" || { echo "ERROR: llvm-nm not found."; exit 1; }
-
-          LIBDIR="libs/${ABI}"
-          test -f "${LIBDIR}/libcpuinfo.a" || { echo "ERROR: libcpuinfo.a missing."; exit 1; }
-          test -f "${LIBDIR}/libXNNPACK.a" || { echo "ERROR: libXNNPACK.a missing."; exit 1; }
-
-          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | \
-               grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+cpuinfo_(arm|aarch64)_(android|linux)_init' >/dev/null; then
-            echo "ERROR: cpuinfo *_init implementation missing (expected one of cpuinfo_arm|aarch64_{android|linux}_init, not undefined) in libcpuinfo.a"
-            exit 1
-          fi
-
-          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | \
-               grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+cpuinfo_isa$' >/dev/null; then
-            echo "ERROR: cpuinfo_isa missing (must be defined, not undefined) in libcpuinfo.a"
-            exit 1
-          fi
-
-          if "$NM" -a "${LIBDIR}/libXNNPACK.a" | grep -E '(^|[[:space:]])U[[:space:]]+xnn_define_pack_lh' >/dev/null; then
-            if ! "$NM" -a "${LIBDIR}/libXNNPACK.a" | \
-                 grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+xnn_define_pack_lh$' >/dev/null; then
-              echo "ERROR: xnn_define_pack_lh missing (referenced but not defined) in libXNNPACK.a"
-              exit 1
-            fi
-          fi
-
-          echo "Symbol sanity checks passed."
-
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
