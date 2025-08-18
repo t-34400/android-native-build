@@ -106,6 +106,10 @@ jobs:
             -DCMAKE_C_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include" \
             -DCMAKE_CXX_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include -I${PWD}/.. -I${PWD}"
 
+      - name: Remove examples
+        working-directory: executorch
+        run: rm -rf examples
+
       - name: Prepare full c10
         working-directory: executorch
         shell: bash
