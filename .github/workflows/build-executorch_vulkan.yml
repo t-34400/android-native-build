@@ -1,0 +1,224 @@
+name: build-executorch-android
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-22.04
+    env:
+      ANDROID_ABI: arm64-v8a
+      ANDROID_API: 26
+      BUILD_TYPE: Release
+      EXECUTORCH_VER: v0.7.0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup CMake
+        uses: lukka/get-cmake@v3.30.3
+
+      - name: Setup Android NDK r27b
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+
+      - name: Clone ExecuTorch ${{ env.EXECUTORCH_VER }}
+        run: |
+          git clone --branch "${EXECUTORCH_VER}" --depth 1 https://github.com/pytorch/executorch.git
+          cd executorch
+          git submodule update --init --recursive
+
+      - name: Install Python deps
+        working-directory: executorch
+        run: python3 -m pip install -r requirements-dev.txt
+
+      - name: Prepare
+        working-directory: executorch
+        run: bash ./install_executorch.sh --clean
+
+      - name: Python deps for codegen/buck2
+        working-directory: executorch
+        run: python3 -m pip install -r requirements-dev.txt
+
+      - name: Install PyTorch (CPU wheel for host-side tools)
+        run: python3 -m pip install --index-url https://download.pytorch.org/whl/test/cpu torch
+
+      - name: Upgrade pip build base
+        run: python3 -m pip install -U "pip>=24" "setuptools>=70" "wheel>=0.43" "packaging>=24.2"
+
+      - name: Install ExecuTorch (Python)
+        run: python3 -m pip install "executorch>=0.7,<0.8"
+
+      - name: Prepare PYTHONPATH and sitecustomize
+        working-directory: executorch
+        run: |
+          : > sitecustomize.py
+          echo "PYTHONPATH=$PWD" >> $GITHUB_ENV
+
+      - name: Check codegen imports
+        working-directory: executorch
+        run: |
+          python3 - <<'PY'
+          import os
+          print("PYTHONPATH =", os.environ.get("PYTHONPATH"))
+          import executorch, executorch.codegen, torchgen
+          print("imports OK")
+          PY
+
+      - name: Hard clean any host-built artifacts
+        working-directory: executorch
+        run: |
+          git clean -fdx -e cmake-android-out
+
+      - name: Configure (Android aarch64, force target/sysroot)
+        working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_ABI: arm64-v8a
+          ANDROID_API: 26
+          BUILD_TYPE: Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf cmake-android-out
+          cmake -S . -B cmake-android-out \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DTHREADS_PREFER_PTHREAD_FLAG=ON \
+            -DEXECUTORCH_BUILD_EXECUTOR_RUNNER=OFF \
+            -DEXECUTORCH_BUILD_VULKAN=ON \
+            -DEXECUTORCH_BUILD_CPUINFO=ON \
+            -DEXECUTORCH_BUILD_PTHREADPOOL=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            -DEXECUTORCH_BUILD_PORTABLE_OPS=OFF \
+            -DXNNPACK_BUILD_LIBRARY=ON \
+            -DCMAKE_C_FLAGS="-D__ANDROID__=1" \
+            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1"
+
+      - name: Build
+        working-directory: executorch
+        run: cmake --build cmake-android-out -j
+
+      - name: Prepare full c10
+        working-directory: executorch
+        shell: bash
+        env:
+          PYTORCH_REF: v2.4.0
+        run: |
+          set -euo pipefail
+          mkdir -p jni/include
+          rm -rf jni/include/c10
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          git init "$tmp/pt" >/dev/null
+          git -C "$tmp/pt" remote add origin https://github.com/pytorch/pytorch.git
+          git -C "$tmp/pt" sparse-checkout init --cone
+          git -C "$tmp/pt" sparse-checkout set c10
+          if git -C "$tmp/pt" fetch --depth 1 origin "$PYTORCH_REF" >/dev/null 2>&1; then
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          else
+            echo "WARN: PYTORCH_REF=${PYTORCH_REF} not found; falling back to main"
+            git -C "$tmp/pt" fetch --depth 1 origin main >/dev/null
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          fi
+          rsync -a "$tmp/pt/c10/" "jni/include/c10/"
+          NEEDS_GEN=0
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h 2>/dev/null; then
+            NEEDS_GEN=1
+          fi
+          if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
+            if [ -f "$tmp/pt/c10/macros/cmake_macros.h.in" ]; then
+              printf '%s\n' \
+                'cmake_minimum_required(VERSION 3.13)' \
+                'project(gen_c10_macros C)' \
+                'configure_file("${SRC_IN}" "${DST}/cmake_macros.h" @ONLY)' \
+                > "$tmp/CMakeLists.txt"
+              cmake -S "$tmp" -B "$tmp/_b" \
+                    -DSRC_IN="$tmp/pt/c10/macros/cmake_macros.h.in" \
+                    -DDST="$tmp/_out" >/dev/null
+              test -f "$tmp/_out/cmake_macros.h" || { echo "ERROR: Failed to generate c10/macros/cmake_macros.h."; exit 1; }
+              mkdir -p jni/include/c10/macros
+              cp -f "$tmp/_out/cmake_macros.h" jni/include/c10/macros/
+              echo "Generated: jni/include/c10/macros/cmake_macros.h"
+            else
+              echo "WARN: cmake_macros.h.in not present at ${PYTORCH_REF}; Macros.h may be headeronly-based."
+            fi
+          fi
+          test -f jni/include/c10/macros/Macros.h || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
+            test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
+          fi
+
+      - name: Package headers & libs (arm64 only) — safe copy
+        working-directory: executorch
+        env:
+          ABI: ${{ env.ANDROID_ABI }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "jni/include" "libs/${ABI}"
+
+          rsync -a --prune-empty-dirs --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' ./ jni/include/executorch/
+
+          mapfile -d '' FILES < <(find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0)
+          test "${#FILES[@]}" -gt 0 || { echo "ERROR: No libraries found under cmake-android-out."; exit 1; }
+          for f in "${FILES[@]}"; do
+            cp -f "$f" "libs/${ABI}/"
+          done
+
+      - name: Sanity check exported libs (symbols must exist)
+        working-directory: executorch
+        env:
+          ABI: ${{ env.ANDROID_ABI }}
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST_BIN="linux-x86_64"
+          NM="${ANDROID_NDK}/toolchains/llvm/prebuilt/${HOST_BIN}/bin/llvm-nm"
+
+          test -x "$NM" || { echo "ERROR: llvm-nm not found."; exit 1; }
+
+          LIBDIR="libs/${ABI}"
+          test -f "${LIBDIR}/libcpuinfo.a" || { echo "ERROR: libcpuinfo.a missing."; exit 1; }
+          test -f "${LIBDIR}/libXNNPACK.a" || { echo "ERROR: libXNNPACK.a missing."; exit 1; }
+
+          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | \
+               grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+cpuinfo_(arm|aarch64)_(android|linux)_init' >/dev/null; then
+            echo "ERROR: cpuinfo *_init implementation missing (expected one of cpuinfo_arm|aarch64_{android|linux}_init, not undefined) in libcpuinfo.a"
+            exit 1
+          fi
+
+          if ! "$NM" -a "${LIBDIR}/libcpuinfo.a" | \
+               grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+cpuinfo_isa$' >/dev/null; then
+            echo "ERROR: cpuinfo_isa missing (must be defined, not undefined) in libcpuinfo.a"
+            exit 1
+          fi
+
+          if "$NM" -a "${LIBDIR}/libXNNPACK.a" | grep -E '(^|[[:space:]])U[[:space:]]+xnn_define_pack_lh' >/dev/null; then
+            if ! "$NM" -a "${LIBDIR}/libXNNPACK.a" | \
+                 grep -E '^[[:xdigit:]]+[[:space:]]+[^Uu][[:space:]]+xnn_define_pack_lh$' >/dev/null; then
+              echo "ERROR: xnn_define_pack_lh missing (referenced but not defined) in libXNNPACK.a"
+              exit 1
+            fi
+          fi
+
+          echo "Symbol sanity checks passed."
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executorch-android-${{ env.ANDROID_ABI }}
+          path: |
+            executorch/jni/include
+            executorch/libs/${{ env.ANDROID_ABI }}
