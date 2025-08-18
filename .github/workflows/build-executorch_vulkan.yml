@@ -84,6 +84,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf cmake-android-out
+          ls executorch/extension/data_loader/
           cmake -S . -B cmake-android-out \
             -DCMAKE_SYSTEM_NAME=Android \
             -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
@@ -101,8 +102,7 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
             -DEXECUTORCH_BUILD_PORTABLE_OPS=OFF \
             -DCMAKE_C_FLAGS="-D__ANDROID__=1" \
-            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1" \
-            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1 -I${PWD}/executorch"
+            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1"
 
       - name: Build
         working-directory: executorch
