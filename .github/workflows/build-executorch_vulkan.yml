@@ -72,10 +72,7 @@ jobs:
         working-directory: executorch
         run: |
           git clean -fdx -e cmake-android-out
-      - name: Remove examples
-        working-directory: executorch
-        run: rm -rf examples
-
+          
       - name: Prepare full c10
         working-directory: executorch
         shell: bash
