@@ -103,10 +103,7 @@ jobs:
             -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
             -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
             -DEXECUTORCH_BUILD_PORTABLE_OPS=OFF \
-            -DCMAKE_C_FLAGS="-D__ANDROID__=1" \
-            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1" \
-            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1 -I${PWD}" \
-            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1 -I${PWD}/executorch"
+            -DCMAKE_C_FLAGS="-D__ANDROID__=1"
 
       - name: Build
         working-directory: executorch
