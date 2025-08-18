@@ -72,40 +72,6 @@ jobs:
         working-directory: executorch
         run: |
           git clean -fdx -e cmake-android-out
-
-      - name: Configure (Android aarch64, force target/sysroot)
-        working-directory: executorch
-        env:
-          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
-          ANDROID_ABI: arm64-v8a
-          ANDROID_API: 26
-          BUILD_TYPE: Release
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -rf cmake-android-out
-          ls extension/data_loader/
-          ls extension/evalue_util/
-          ls extension/runner_util/
-          cmake -S . -B cmake-android-out \
-            -DCMAKE_SYSTEM_NAME=Android \
-            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI="${ANDROID_ABI}" \
-            -DANDROID_PLATFORM=android-${ANDROID_API} \
-            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
-            -DTHREADS_PREFER_PTHREAD_FLAG=ON \
-            -DEXECUTORCH_BUILD_EXECUTOR_RUNNER=OFF \
-            -DEXECUTORCH_BUILD_VULKAN=ON \
-            -DEXECUTORCH_BUILD_CPUINFO=ON \
-            -DEXECUTORCH_BUILD_PTHREADPOOL=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
-            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
-            -DEXECUTORCH_BUILD_PORTABLE_OPS=OFF \
-            -DCMAKE_C_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include" \
-            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include -I${PWD}/.. -I${PWD}"
-
       - name: Remove examples
         working-directory: executorch
         run: rm -rf examples
@@ -159,6 +125,39 @@ jobs:
           if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
             test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
           fi
+
+      - name: Configure (Android aarch64, force target/sysroot)
+        working-directory: executorch
+        env:
+          ANDROID_NDK: ${{ steps.ndk.outputs.ndk-path }}
+          ANDROID_ABI: arm64-v8a
+          ANDROID_API: 26
+          BUILD_TYPE: Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf cmake-android-out
+          ls extension/data_loader/
+          ls extension/evalue_util/
+          ls extension/runner_util/
+          cmake -S . -B cmake-android-out \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DTHREADS_PREFER_PTHREAD_FLAG=ON \
+            -DEXECUTORCH_BUILD_EXECUTOR_RUNNER=OFF \
+            -DEXECUTORCH_BUILD_VULKAN=ON \
+            -DEXECUTORCH_BUILD_CPUINFO=ON \
+            -DEXECUTORCH_BUILD_PTHREADPOOL=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            -DEXECUTORCH_BUILD_PORTABLE_OPS=OFF \
+            -DCMAKE_C_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include" \
+            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include -I${PWD}/.. -I${PWD}"
 
       - name: Build
         working-directory: executorch
