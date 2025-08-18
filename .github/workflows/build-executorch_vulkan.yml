@@ -155,7 +155,7 @@ jobs:
 
       - name: Build
         working-directory: executorch
-        run: cmake --build cmake-android-out -j --target install
+        run: cmake --build cmake-android-out --target vulkan_executor_runner -j32
 
       - name: Package headers & libs (arm64 only) — safe copy
         working-directory: executorch
