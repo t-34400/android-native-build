@@ -1,0 +1,181 @@
+name: build-executorch-android-vulkan_debug
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-22.04
+    env:
+      EXECUTORCH_VER: v0.7.0
+      ANDROID_ABI: arm64-v8a
+      ANDROID_API: "26"
+      BUILD_TYPE: Release
+      PYTORCH_REF: v2.4.0
+      CONDA_ENV: executorch-android
+      OUTDIR: output
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Android NDK r27b
+        id: ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27b
+
+      - name: Setup Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          activate-environment: ${{ env.CONDA_ENV }}
+          auto-activate-base: false
+          python-version: "3.10"
+
+      - name: Prepare env
+        shell: bash
+        run: |
+          echo "ANDROID_NDK=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+          conda install -y -c conda-forge cmake=3.29 ninja git
+          python -m pip install -U "pip>=24" "setuptools>=70" "wheel>=0.43" "packaging>=24.2"
+
+      - name: Clone executorch
+        shell: bash
+        run: |
+          if [ ! -d executorch ]; then
+            git clone --branch "${EXECUTORCH_VER}" --depth 1 https://github.com/pytorch/executorch.git
+            ( cd executorch && git submodule update --init --recursive )
+          fi
+
+      - name: Python deps
+        shell: bash
+        run: |
+          ( cd executorch && python -m pip install -r requirements-dev.txt )
+          python -m pip install --index-url https://download.pytorch.org/whl/test/cpu torch
+          python -m pip install "executorch>=0.7,<0.8"
+          export PYTHONPATH="$GITHUB_WORKSPACE/executorch:${PYTHONPATH:-}"
+          python -c "import os;print('PYTHONPATH=',os.environ.get('PYTHONPATH'));import executorch,executorch.codegen,torchgen;print('imports OK')"
+
+      - name: Configure
+        shell: bash
+        run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE/executorch:${PYTHONPATH:-}"
+          cd executorch
+          git clean -fdx -e cmake-android-out
+          rm -rf cmake-android-out
+          cmake -S . -B cmake-android-out \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DEXECUTORCH_ENABLE_LOGGING=ON \
+            -DEXECUTORCH_LOG_LEVEL=DEBUG \
+            -DCMAKE_SYSTEM_NAME=Android \
+            -DCMAKE_TOOLCHAIN_FILE="${ANDROID_NDK}/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI="${ANDROID_ABI}" \
+            -DANDROID_PLATFORM=android-${ANDROID_API} \
+            -DCMAKE_BUILD_TYPE="${BUILD_TYPE}" \
+            -DCMAKE_INSTALL_PREFIX="$PWD/_install" \
+            -DEXECUTORCH_BUILD_EXECUTOR_RUNNER=ON \
+            -DEXECUTORCH_BUILD_VULKAN=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_DATA_LOADER=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_MODULE=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_FLAT_TENSOR=ON \
+            -DEXECUTORCH_BUILD_EXTENSION_TENSOR=ON \
+            -DEXECUTORCH_BUILD_PORTABLE_OPS=ON \
+            -DCMAKE_C_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include" \
+            -DCMAKE_CXX_FLAGS="-D__ANDROID__=1 -I${PWD}/jni/include -I${PWD}/.. -I${PWD}"
+
+      - name: Build and Install
+        shell: bash
+        run: |
+          export PATH="$CONDA_PREFIX/bin:$PATH"
+          cd executorch
+          cmake --build cmake-android-out --target all -j"$(nproc)"
+          cmake --install cmake-android-out
+
+      - name: Prepare full c10
+        working-directory: executorch
+        shell: bash
+        env:
+          PYTORCH_REF: v2.4.0
+        run: |
+          set -euo pipefail
+          mkdir -p "${OUTDIR}/jni/include"
+          rm -rf "${OUTDIR}/jni/include/c10"
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          git init "$tmp/pt" >/dev/null
+          git -C "$tmp/pt" remote add origin https://github.com/pytorch/pytorch.git
+          git -C "$tmp/pt" sparse-checkout init --cone
+          git -C "$tmp/pt" sparse-checkout set c10
+          if git -C "$tmp/pt" fetch --depth 1 origin "$PYTORCH_REF" >/dev/null 2>&1; then
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          else
+            echo "WARN: PYTORCH_REF=${PYTORCH_REF} not found; falling back to main"
+            git -C "$tmp/pt" fetch --depth 1 origin main >/dev/null
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          fi
+          rsync -a "$tmp/pt/c10/" "${OUTDIR}/jni/include/c10/"
+          NEEDS_GEN=0
+          if grep -q '#include <c10/macros/cmake_macros.h>' "${OUTDIR}/jni/include/c10/macros/Macros.h" 2>/dev/null; then
+            NEEDS_GEN=1
+          fi
+          if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f "${OUTDIR}/jni/include/c10/macros/cmake_macros.h" ]; then
+            if [ -f "$tmp/pt/c10/macros/cmake_macros.h.in" ]; then
+              printf '%s\n' \
+                'cmake_minimum_required(VERSION 3.13)' \
+                'project(gen_c10_macros C)' \
+                'configure_file("${SRC_IN}" "${DST}/cmake_macros.h" @ONLY)' \
+                > "$tmp/CMakeLists.txt"
+              cmake -S "$tmp" -B "$tmp/_b" \
+                    -DSRC_IN="$tmp/pt/c10/macros/cmake_macros.h.in" \
+                    -DDST="$tmp/_out" >/dev/null
+              test -f "$tmp/_out/cmake_macros.h" || { echo "ERROR: Failed to generate c10/macros/cmake_macros.h."; exit 1; }
+              mkdir -p "${OUTDIR}/jni/include/c10/macros"
+              cp -f "$tmp/_out/cmake_macros.h" "${OUTDIR}/jni/include/c10/macros/"
+              echo "Generated: ${OUTDIR}/jni/include/c10/macros/cmake_macros.h"
+            else
+              echo "WARN: cmake_macros.h.in not present at ${PYTORCH_REF}; Macros.h may be headeronly-based."
+            fi
+          fi
+          test -f "${OUTDIR}/jni/include/c10/macros/Macros.h" || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
+          if grep -q '#include <c10/macros/cmake_macros.h>' "${OUTDIR}/jni/include/c10/macros/Macros.h"; then
+            test -f "${OUTDIR}/jni/include/c10/macros/cmake_macros.h" || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
+          fi
+          
+      - name: Package headers and libs
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd executorch
+          INSTALL_PREFIX="${INSTALL_PREFIX:-$PWD/_install}"
+          ABI="${ANDROID_ABI:-arm64-v8a}"
+          mkdir -p "${OUTDIR}/jni/include" "${OUTDIR}/libs/${ABI}"
+          if [ -d "${INSTALL_PREFIX}/include" ]; then
+            rsync -a --prune-empty-dirs \
+              --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' \
+              "${INSTALL_PREFIX}/include/" "${OUTDIR}/jni/include/"
+          fi
+          rsync -a --prune-empty-dirs \
+            --include '*/' --include '*.h' --include '*.hpp' --include '*.inc' --exclude '*' \
+            ./ "${OUTDIR}/jni/include/executorch/"
+          mapfile -d '' FILES < <(
+            { test -d "${INSTALL_PREFIX}/lib" && find "${INSTALL_PREFIX}/lib" -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0; }
+            find cmake-android-out -type f \( -name 'lib*.a' -o -name 'lib*.so' \) -print0
+          )
+          if [ "${#FILES[@]}" -eq 0 ]; then
+            echo "ERROR: No libraries found under ${INSTALL_PREFIX}/lib or cmake-android-out." >&2
+            exit 1
+          fi
+          for f in "${FILES[@]}"; do
+            cp -f "$f" "${OUTDIR}/libs/${ABI}/"
+          done
+          echo "Headers: $(realpath "${OUTDIR}/jni/include")"
+          echo "Libs: $(realpath "${OUTDIR}/libs/${ABI}")"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: executorch-android-${{ env.ANDROID_ABI }}
+          path: executorch/${{ env.OUTDIR }}
