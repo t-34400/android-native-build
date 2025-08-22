@@ -13,7 +13,7 @@ jobs:
       EXECUTORCH_VER: v0.7.0
       ANDROID_ABI: arm64-v8a
       ANDROID_API: "26"
-      BUILD_TYPE: Release
+      BUILD_TYPE: Debug
       PYTORCH_REF: v2.4.0
       CONDA_ENV: executorch-android
       OUTDIR: output
@@ -67,7 +67,6 @@ jobs:
           git clean -fdx -e cmake-android-out
           rm -rf cmake-android-out
           cmake -S . -B cmake-android-out \
-            -DCMAKE_BUILD_TYPE=Debug \
             -DEXECUTORCH_ENABLE_LOGGING=ON \
             -DEXECUTORCH_LOG_LEVEL=DEBUG \
             -DCMAKE_SYSTEM_NAME=Android \
