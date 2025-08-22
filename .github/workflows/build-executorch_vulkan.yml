@@ -98,8 +98,8 @@ jobs:
           PYTORCH_REF: v2.4.0
         run: |
           set -euo pipefail
-          mkdir -p jni/include
-          rm -rf jni/include/c10
+          mkdir -p "${OUTDIR}/jni/include"
+          rm -rf "${OUTDIR}/jni/include/c10"
           tmp=$(mktemp -d)
           trap 'rm -rf "$tmp"' EXIT
           git init "$tmp/pt" >/dev/null
@@ -113,12 +113,12 @@ jobs:
             git -C "$tmp/pt" fetch --depth 1 origin main >/dev/null
             git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
           fi
-          rsync -a "$tmp/pt/c10/" "jni/include/c10/"
+          rsync -a "$tmp/pt/c10/" "${OUTDIR}/jni/include/c10/"
           NEEDS_GEN=0
-          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h 2>/dev/null; then
+          if grep -q '#include <c10/macros/cmake_macros.h>' "${OUTDIR}/jni/include/c10/macros/Macros.h" 2>/dev/null; then
             NEEDS_GEN=1
           fi
-          if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
+          if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f "${OUTDIR}/jni/include/c10/macros/cmake_macros.h" ]; then
             if [ -f "$tmp/pt/c10/macros/cmake_macros.h.in" ]; then
               printf '%s\n' \
                 'cmake_minimum_required(VERSION 3.13)' \
@@ -129,16 +129,16 @@ jobs:
                     -DSRC_IN="$tmp/pt/c10/macros/cmake_macros.h.in" \
                     -DDST="$tmp/_out" >/dev/null
               test -f "$tmp/_out/cmake_macros.h" || { echo "ERROR: Failed to generate c10/macros/cmake_macros.h."; exit 1; }
-              mkdir -p jni/include/c10/macros
-              cp -f "$tmp/_out/cmake_macros.h" jni/include/c10/macros/
-              echo "Generated: jni/include/c10/macros/cmake_macros.h"
+              mkdir -p "${OUTDIR}/jni/include/c10/macros"
+              cp -f "$tmp/_out/cmake_macros.h" "${OUTDIR}/jni/include/c10/macros/"
+              echo "Generated: ${OUTDIR}/jni/include/c10/macros/cmake_macros.h"
             else
               echo "WARN: cmake_macros.h.in not present at ${PYTORCH_REF}; Macros.h may be headeronly-based."
             fi
           fi
-          test -f jni/include/c10/macros/Macros.h || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
-          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
-            test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
+          test -f "${OUTDIR}/jni/include/c10/macros/Macros.h" || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
+          if grep -q '#include <c10/macros/cmake_macros.h>' "${OUTDIR}/jni/include/c10/macros/Macros.h"; then
+            test -f "${OUTDIR}/jni/include/c10/macros/cmake_macros.h" || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
           fi
           
       - name: Package headers and libs
