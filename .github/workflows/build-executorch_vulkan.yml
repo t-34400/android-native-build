@@ -2,28 +2,31 @@ name: build-executorch-android
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ main ]
 
-env:
-  EXECUTORCH_VER: v0.7.0
-  ANDROID_ABI: arm64-v8a
-  ANDROID_API: "26"
-  BUILD_TYPE: Release
-  PYTORCH_REF: v2.4.0
-  CONDA_ENV: executorch-android
-  OUTDIR: output
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-arm64:
+    runs-on: ubuntu-22.04
+    env:
+      EXECUTORCH_VER: v0.7.0
+      ANDROID_ABI: arm64-v8a
+      ANDROID_API: "26"
+      BUILD_TYPE: Release
+      PYTORCH_REF: v2.4.0
+      CONDA_ENV: executorch-android
+      OUTDIR: output
+      
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup NDK
+      - name: Setup Android NDK r27b
         id: ndk
-        uses: actions/setup-ndk@v1
+        uses: nttld/setup-ndk@v1
         with:
-          ndk-version: r26d
+          ndk-version: r27b
 
       - name: Setup Miniconda
         uses: conda-incubator/setup-miniconda@v3
