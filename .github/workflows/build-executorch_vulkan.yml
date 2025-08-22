@@ -91,6 +91,56 @@ jobs:
           cmake --build cmake-android-out --target all -j"$(nproc)"
           cmake --install cmake-android-out
 
+      - name: Prepare full c10
+        working-directory: executorch
+        shell: bash
+        env:
+          PYTORCH_REF: v2.4.0
+        run: |
+          set -euo pipefail
+          mkdir -p jni/include
+          rm -rf jni/include/c10
+          tmp=$(mktemp -d)
+          trap 'rm -rf "$tmp"' EXIT
+          git init "$tmp/pt" >/dev/null
+          git -C "$tmp/pt" remote add origin https://github.com/pytorch/pytorch.git
+          git -C "$tmp/pt" sparse-checkout init --cone
+          git -C "$tmp/pt" sparse-checkout set c10
+          if git -C "$tmp/pt" fetch --depth 1 origin "$PYTORCH_REF" >/dev/null 2>&1; then
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          else
+            echo "WARN: PYTORCH_REF=${PYTORCH_REF} not found; falling back to main"
+            git -C "$tmp/pt" fetch --depth 1 origin main >/dev/null
+            git -C "$tmp/pt" checkout --force FETCH_HEAD >/dev/null 2>&1 || true
+          fi
+          rsync -a "$tmp/pt/c10/" "jni/include/c10/"
+          NEEDS_GEN=0
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h 2>/dev/null; then
+            NEEDS_GEN=1
+          fi
+          if [ "$NEEDS_GEN" -eq 1 ] && [ ! -f jni/include/c10/macros/cmake_macros.h ]; then
+            if [ -f "$tmp/pt/c10/macros/cmake_macros.h.in" ]; then
+              printf '%s\n' \
+                'cmake_minimum_required(VERSION 3.13)' \
+                'project(gen_c10_macros C)' \
+                'configure_file("${SRC_IN}" "${DST}/cmake_macros.h" @ONLY)' \
+                > "$tmp/CMakeLists.txt"
+              cmake -S "$tmp" -B "$tmp/_b" \
+                    -DSRC_IN="$tmp/pt/c10/macros/cmake_macros.h.in" \
+                    -DDST="$tmp/_out" >/dev/null
+              test -f "$tmp/_out/cmake_macros.h" || { echo "ERROR: Failed to generate c10/macros/cmake_macros.h."; exit 1; }
+              mkdir -p jni/include/c10/macros
+              cp -f "$tmp/_out/cmake_macros.h" jni/include/c10/macros/
+              echo "Generated: jni/include/c10/macros/cmake_macros.h"
+            else
+              echo "WARN: cmake_macros.h.in not present at ${PYTORCH_REF}; Macros.h may be headeronly-based."
+            fi
+          fi
+          test -f jni/include/c10/macros/Macros.h || { echo "ERROR: c10/macros/Macros.h missing."; exit 1; }
+          if grep -q '#include <c10/macros/cmake_macros.h>' jni/include/c10/macros/Macros.h; then
+            test -f jni/include/c10/macros/cmake_macros.h || { echo "ERROR: c10/macros/cmake_macros.h missing."; exit 1; }
+          fi
+          
       - name: Package headers and libs
         shell: bash
         run: |
