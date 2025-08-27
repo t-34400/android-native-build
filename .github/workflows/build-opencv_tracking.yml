@@ -58,7 +58,7 @@ jobs:
             -D BUILD_EXAMPLES=OFF -D BUILD_ANDROID_EXAMPLES=OFF \
             -D BUILD_ANDROID_PROJECTS=OFF \
             -D OPENCV_EXTRA_MODULES_PATH=$GITHUB_WORKSPACE/opencv_contrib/modules \
-            -D BUILD_LIST=core,imgproc,calib3d,tracking,imgcodecs,highgui,videoio \
+            -D BUILD_LIST=core,imgproc,calib3d,video,tracking,imgcodecs,highgui,videoio \
             -D CMAKE_INSTALL_PREFIX=$GITHUB_WORKSPACE/install-android/sdk
       
       - name: Build
